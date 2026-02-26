@@ -4,8 +4,13 @@ import {
   TOP_12_DEEP_FRAMEWORK_IDS,
   type FrameworkId,
   type Top12DeepFrameworkId,
+  type Top12VisualizationData,
   type VisualizationSpec,
 } from "@/lib/types";
+import {
+  scoreTop12Representation,
+  type Top12RubricReport,
+} from "@/lib/frameworks/representation-rubric";
 
 const idSchema = z.string().min(1);
 const numeric01 = z.number().min(0).max(1);
@@ -165,6 +170,13 @@ const monteCarloDataSchema = z
     p10: numeric01,
     p50: numeric01,
     p90: numeric01,
+    metadata: z
+      .object({
+        trials: z.number().int().positive(),
+        distribution: z.string().min(1),
+        correlationMode: z.string().min(1),
+      })
+      .optional(),
   })
   .strict();
 
@@ -177,6 +189,7 @@ const consequencesDataSchema = z
           horizon: z.string().min(1),
           direct: numeric01,
           indirect: numeric01,
+          thirdOrder: numeric01.optional(),
           net: z.number().min(-1).max(1),
         }),
       )
@@ -286,6 +299,7 @@ export function validateFrameworkViz(
   ok: boolean;
   canonical: boolean;
   issues: string[];
+  rubric?: Top12RubricReport;
 } {
   if (!isTop12FrameworkId(frameworkId)) {
     return { ok: true, canonical: false, issues: [] };
@@ -302,9 +316,29 @@ export function validateFrameworkViz(
   }
 
   const parsed = TOP12_DATA_SCHEMA_BY_FRAMEWORK[frameworkId].safeParse(vizPayload.data);
+  let rubric: Top12RubricReport | undefined;
   if (!parsed.success) {
     for (const issue of parsed.error.issues) {
       issues.push(issue.message);
+    }
+  } else {
+    rubric = scoreTop12Representation(
+      frameworkId,
+      parsed.data as Top12VisualizationData,
+    );
+
+    for (const criterion of rubric.criteria) {
+      if (!criterion.passed && criterion.issue) {
+        issues.push(`[${criterion.id}] ${criterion.issue}`);
+      }
+    }
+
+    if (!rubric.passed) {
+      issues.push(
+        `Rubric score ${Math.round(rubric.score * 100)}% is below threshold ${Math.round(
+          rubric.passThreshold * 100,
+        )}% for ${frameworkId}.`,
+      );
     }
   }
 
@@ -312,6 +346,6 @@ export function validateFrameworkViz(
     ok: issues.length === 0,
     canonical: true,
     issues,
+    rubric,
   };
 }
-

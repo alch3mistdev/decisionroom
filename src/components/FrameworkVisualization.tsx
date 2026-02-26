@@ -647,7 +647,7 @@ function BcgViz({ data }: { data: BcgVizData }) {
   const points = data.points;
   const innerWidth = WIDTH - PADDING.left - PADDING.right;
   const innerHeight = HEIGHT - PADDING.top - PADDING.bottom;
-  const x = d3.scaleLinear().domain([0, 1]).range([0, innerWidth]);
+  const x = d3.scaleLinear().domain([1, 0]).range([0, innerWidth]);
   const y = d3.scaleLinear().domain([0, 1]).range([innerHeight, 0]);
 
   return (
@@ -678,7 +678,7 @@ function BcgViz({ data }: { data: BcgVizData }) {
         ))}
 
         <text x={innerWidth / 2} y={innerHeight + 28} textAnchor="middle" fill="#93c5fd" fontSize="11">
-          Relative Market Share
+          Relative Market Share (high → low)
         </text>
         <text x={-innerHeight / 2} y={-34} transform="rotate(-90)" textAnchor="middle" fill="#93c5fd" fontSize="11">
           Market Growth
@@ -872,7 +872,7 @@ function ChasmViz({ data }: { data: ChasmVizData }) {
         ))}
 
         <line x1={chasmX} y1={0} x2={chasmX} y2={innerHeight} stroke="rgba(248,113,113,0.8)" strokeDasharray="5 4" />
-        <text x={chasmX + 6} y={16} fill="#fecaca" fontSize="10">Chasm ({(data.gap * 100).toFixed(0)}%)</text>
+        <text x={chasmX + 6} y={16} fill="#fecaca" fontSize="10">Chasm Risk ({(data.gap * 100).toFixed(0)}%)</text>
 
         {rows.map((row) => (
           <text
@@ -951,6 +951,10 @@ function ConsequencesViz({ data }: { data: ConsequencesVizData }) {
     .line<{ horizon: string; indirect: number }>()
     .x((point) => x(point.horizon) ?? 0)
     .y((point) => y(point.indirect));
+  const thirdOrderLine = d3
+    .line<{ horizon: string; thirdOrder?: number }>()
+    .x((point) => x(point.horizon) ?? 0)
+    .y((point) => y(point.thirdOrder ?? 0));
 
   return (
     <div className="space-y-2">
@@ -958,11 +962,13 @@ function ConsequencesViz({ data }: { data: ConsequencesVizData }) {
         <g transform={`translate(${PADDING.left},${PADDING.top})`}>
           <path d={directLine(rows) ?? ""} fill="none" stroke="rgba(56,189,248,0.95)" strokeWidth={2.5} />
           <path d={indirectLine(rows) ?? ""} fill="none" stroke="rgba(248,113,113,0.9)" strokeWidth={2.2} strokeDasharray="6 4" />
+          <path d={thirdOrderLine(rows) ?? ""} fill="none" stroke="rgba(251,191,36,0.95)" strokeWidth={2} strokeDasharray="3 4" />
 
           {rows.map((row) => (
             <g key={row.horizon}>
               <circle cx={x(row.horizon) ?? 0} cy={y(row.direct)} r={4} fill="#38bdf8" />
               <circle cx={x(row.horizon) ?? 0} cy={y(row.indirect)} r={4} fill="#f87171" />
+              <circle cx={x(row.horizon) ?? 0} cy={y(row.thirdOrder ?? 0)} r={4} fill="#fbbf24" />
               <text x={x(row.horizon) ?? 0} y={innerHeight + 18} textAnchor="middle" fill="#cbd5e1" fontSize="10">
                 {row.horizon}
               </text>
@@ -976,6 +982,7 @@ function ConsequencesViz({ data }: { data: ConsequencesVizData }) {
             <p className="font-semibold text-slate-100">{row.horizon}</p>
             <p className="text-sky-200">Direct {(row.direct * 100).toFixed(0)}%</p>
             <p className="text-rose-200">Indirect {(row.indirect * 100).toFixed(0)}%</p>
+            <p className="text-amber-200">3rd Order {((row.thirdOrder ?? 0) * 100).toFixed(0)}%</p>
             <p className="text-slate-300">Net {(row.net * 100).toFixed(0)}%</p>
           </div>
         ))}

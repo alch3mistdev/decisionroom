@@ -256,6 +256,11 @@ export interface MonteCarloVizData {
   p10: number;
   p50: number;
   p90: number;
+  metadata?: {
+    trials: number;
+    distribution: string;
+    correlationMode: string;
+  };
 }
 
 export interface ConsequencesVizData {
@@ -264,6 +269,7 @@ export interface ConsequencesVizData {
     horizon: string;
     direct: number;
     indirect: number;
+    thirdOrder?: number;
     net: number;
   }>;
   links: Array<{

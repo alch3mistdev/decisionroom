@@ -39,6 +39,61 @@ const HYPE_PHASES = [
   { phase: "Plateau of Productivity", x: 0.92, y: 0.72 },
 ] as const;
 
+const MANDATORY_MARKERS = [
+  "soc2",
+  "audit",
+  "compliance",
+  "regulatory",
+  "legal",
+  "security",
+  "mandatory",
+  "critical",
+] as const;
+
+const INTERNAL_MARKERS = [
+  "team",
+  "capacity",
+  "headcount",
+  "process",
+  "workflow",
+  "training",
+  "resource",
+  "budget",
+  "implementation",
+] as const;
+
+const EXTERNAL_OPPORTUNITY_MARKERS = [
+  "market",
+  "customer",
+  "enterprise",
+  "partner",
+  "segment",
+  "adoption",
+  "growth",
+  "demand",
+] as const;
+
+const EXTERNAL_THREAT_MARKERS = [
+  "competitor",
+  "regulatory",
+  "compliance",
+  "security",
+  "incident",
+  "outage",
+  "churn",
+  "trust",
+  "reputation",
+  "csat",
+] as const;
+
+const CHASM_SEGMENT_SHARES: ChasmVizData["segments"] = [
+  { segment: "Innovators", adoption: 0.025 },
+  { segment: "Early Adopters", adoption: 0.135 },
+  { segment: "Early Majority", adoption: 0.34 },
+  { segment: "Late Majority", adoption: 0.34 },
+  { segment: "Laggards", adoption: 0.16 },
+];
+
 function dedupe(values: string[]): string[] {
   const seen = new Set<string>();
   const unique: string[] = [];
@@ -73,6 +128,30 @@ function pickOptions(brief: DecisionBrief, maxItems: number): string[] {
   }
 
   return candidates.slice(0, maxItems);
+}
+
+function includesAny(value: string, tokens: readonly string[]): boolean {
+  const normalized = value.toLowerCase();
+  return tokens.some((token) => normalized.includes(token));
+}
+
+function withPrefix(values: string[], prefix: string): string[] {
+  return values.map((value) => `${prefix}: ${value}`);
+}
+
+function questionToRiskStatement(question: string): string {
+  const normalized = question.trim().replace(/[?]+$/g, "");
+  if (!normalized) {
+    return "Unresolved validation gap could trigger rollout failure";
+  }
+  return `Unresolved ${normalized.toLowerCase()} could trigger rollout failure`;
+}
+
+function toTestableAssumption(assumption: string, outcome: string, timeLimit: string | null): string {
+  const normalizedAssumption = assumption.trim().replace(/[.]+$/g, "");
+  const normalizedOutcome = outcome.trim().replace(/[.]+$/g, "");
+  const windowText = timeLimit ? `within ${timeLimit}` : "within the next iteration";
+  return `If ${normalizedAssumption.toLowerCase()}, then ${normalizedOutcome.toLowerCase()} should improve ${windowText}.`;
 }
 
 function interpolateYOnCurve(x: number): number {
@@ -110,32 +189,61 @@ function buildEisenhowerViz(brief: DecisionBrief, themes: ThemeVector): Visualiz
   const deadlineSignal = deadlinePressure(brief);
 
   const points: EisenhowerVizData["points"] = tasks.map((task, index) => {
-    const urgency = bounded(
-      0.35 * deadlineSignal +
-        0.25 * tokenOverlap(task, constraintsCorpus) +
-        0.2 * tokenOverlap(task, openQuestionsCorpus) +
-        0.2 * themes.urgency,
+    const mandatorySignal = includesAny(task, MANDATORY_MARKERS) ? 1 : 0;
+    const complianceCriticality = bounded(
+      0.7 * mandatorySignal + 0.3 * tokenOverlap(task, constraintsCorpus),
     );
-    const importance = bounded(
-      0.35 * tokenOverlap(task, successCorpus) +
-        0.2 * tokenOverlap(task, brief.decisionStatement) +
-        0.25 * themes.opportunity +
+    const customerImpact = bounded(
+      0.5 * tokenOverlap(task, successCorpus) +
+        0.3 * keywordScore(task, ["customer", "csat", "reliability", "quality", "incident"]) +
         0.2 * themes.stakeholderImpact,
     );
+    const urgency = bounded(
+      0.22 +
+        0.24 * deadlineSignal +
+        0.18 * tokenOverlap(task, constraintsCorpus) +
+        0.12 * tokenOverlap(task, openQuestionsCorpus) +
+        0.14 * themes.urgency +
+        0.1 * complianceCriticality +
+        0.06 * customerImpact,
+    );
+    const importance = bounded(
+      0.2 +
+        0.22 * tokenOverlap(task, successCorpus) +
+        0.12 * tokenOverlap(task, brief.decisionStatement) +
+        0.16 * themes.opportunity +
+        0.16 * themes.stakeholderImpact +
+        0.14 * tokenOverlap(task, constraintsCorpus) +
+        0.1 * customerImpact +
+        0.1 * complianceCriticality,
+    );
 
-    const quadrant =
-      urgency >= 0.5 && importance >= 0.5
-        ? "do"
-        : urgency < 0.5 && importance >= 0.5
-          ? "schedule"
-          : urgency >= 0.5 && importance < 0.5
-            ? "delegate"
-            : "eliminate";
+    const effectiveImportance = bounded(
+      importance + (complianceCriticality >= 0.45 ? 0.18 : 0),
+    );
+
+    let quadrant: EisenhowerVizData["points"][number]["quadrant"];
+    if (complianceCriticality >= 0.45) {
+      quadrant = urgency >= 0.45 ? "do" : "schedule";
+    } else if (urgency >= 0.5 && effectiveImportance >= 0.5) {
+      quadrant = "do";
+    } else if (urgency < 0.5 && effectiveImportance >= 0.5) {
+      quadrant = "schedule";
+    } else if (
+      urgency >= 0.5 &&
+      effectiveImportance < 0.5 &&
+      complianceCriticality < 0.35 &&
+      customerImpact < 0.45
+    ) {
+      quadrant = "delegate";
+    } else {
+      quadrant = "eliminate";
+    }
 
     return {
       label: task || `Task ${index + 1}`,
       urgency,
-      importance,
+      importance: effectiveImportance,
       quadrant,
     };
   });
@@ -172,21 +280,51 @@ function buildEisenhowerViz(brief: DecisionBrief, themes: ThemeVector): Visualiz
 
 function buildSwotViz(brief: DecisionBrief): VisualizationSpec {
   const strengths = dedupe([
-    ...brief.successCriteria.map((criterion) => `Strong fit: ${criterion}`),
-    ...brief.alternatives.slice(0, 2).map((alternative) => `Execution upside: ${alternative}`),
+    ...withPrefix(brief.successCriteria, "Internal strength"),
+    ...withPrefix(
+      brief.alternatives.filter((alternative) => includesAny(alternative, INTERNAL_MARKERS)),
+      "Internal capability",
+    ),
   ]).slice(0, 5);
   const weaknesses = dedupe([
-    ...brief.constraints.map((constraint) => `Constraint pressure: ${constraint}`),
-    ...brief.assumptions.slice(0, 2).map((assumption) => `Assumption risk: ${assumption}`),
+    ...withPrefix(brief.constraints, "Internal weakness"),
+    ...withPrefix(brief.assumptions, "Internal fragility"),
   ]).slice(0, 5);
   const opportunities = dedupe([
-    ...brief.executionSteps.map((step) => `Opportunity via: ${step}`),
-    ...brief.alternatives.map((alternative) => `Option leverage: ${alternative}`),
+    ...withPrefix(
+      brief.executionSteps.filter((step) => includesAny(step, EXTERNAL_OPPORTUNITY_MARKERS)),
+      "External opportunity",
+    ),
+    ...withPrefix(
+      brief.openQuestions
+        .filter((question) => includesAny(question, EXTERNAL_OPPORTUNITY_MARKERS))
+        .map((question) => `Validate external demand signal: ${question}`),
+      "External opportunity",
+    ),
+    ...withPrefix(
+      brief.alternatives.filter((alternative) => includesAny(alternative, EXTERNAL_OPPORTUNITY_MARKERS)),
+      "External growth path",
+    ),
   ]).slice(0, 5);
   const threats = dedupe([
-    ...brief.openQuestions.map((question) => `Unresolved risk: ${question}`),
-    ...brief.constraints.slice(0, 2).map((constraint) => `Failure mode: ${constraint}`),
+    ...withPrefix(
+      brief.constraints.filter((constraint) => includesAny(constraint, EXTERNAL_THREAT_MARKERS)),
+      "External threat",
+    ),
+    ...withPrefix(
+      brief.openQuestions.map((question) => questionToRiskStatement(question)),
+      "External threat",
+    ),
   ]).slice(0, 5);
+
+  const safeOpportunities =
+    opportunities.length > 0
+      ? opportunities
+      : ["External opportunity: Controlled pilot can unlock broader enterprise demand."];
+  const safeThreats =
+    threats.length > 0
+      ? threats
+      : ["External threat: Market and trust response could degrade if rollout quality is weak."];
 
   return {
     type: "swot",
@@ -196,8 +334,8 @@ function buildSwotViz(brief: DecisionBrief): VisualizationSpec {
       kind: "swot_analysis",
       strengths: strengths.length > 0 ? strengths : ["No explicit strengths captured yet."],
       weaknesses: weaknesses.length > 0 ? weaknesses : ["No explicit weaknesses captured yet."],
-      opportunities: opportunities.length > 0 ? opportunities : ["No explicit opportunities captured yet."],
-      threats: threats.length > 0 ? threats : ["No explicit threats captured yet."],
+      opportunities: safeOpportunities,
+      threats: safeThreats,
     } satisfies SwotVizData,
   };
 }
@@ -247,16 +385,16 @@ function buildBcgViz(brief: DecisionBrief, themes: ThemeVector): VisualizationSp
   return {
     type: "scatter",
     title: "BCG Growth-Share Matrix",
-    xLabel: "Relative Market Share",
+    xLabel: "Relative Market Share (high → low)",
     yLabel: "Market Growth",
     vizSchemaVersion: 2,
     data: {
       kind: "bcg_matrix",
       quadrants: {
-        topLeft: "Question Marks",
-        topRight: "Stars",
-        bottomLeft: "Dogs",
-        bottomRight: "Cash Cows",
+        topLeft: "Stars",
+        topRight: "Question Marks",
+        bottomLeft: "Cash Cows",
+        bottomRight: "Dogs",
       },
       points,
     } satisfies BcgVizData,
@@ -319,10 +457,10 @@ function buildProjectPortfolioViz(brief: DecisionBrief, themes: ThemeVector): Vi
     data: {
       kind: "project_portfolio_matrix",
       quadrants: {
-        topLeft: "Low Value, High Risk",
+        topLeft: "High Value, Low Risk",
         topRight: "High Value, High Risk",
         bottomLeft: "Low Value, Low Risk",
-        bottomRight: "High Value, Low Risk",
+        bottomRight: "Low Value, High Risk",
       },
       points,
     } satisfies ProjectPortfolioVizData,
@@ -338,12 +476,15 @@ function buildParetoViz(brief: DecisionBrief, themes: ThemeVector): Visualizatio
     factors.map((factor, index) => ({
       label: factor,
       detail: brief.executionSteps[index] ?? factor,
+      // Apply a rank decay to preserve Pareto concentration in the canonical view.
+      // This prevents flat contribution curves that invalidate 80/20 interpretation.
       value:
-        0.18 +
-        0.45 * tokenOverlap(factor, successCorpus) +
-        0.18 * tokenOverlap(factor, constraintCorpus) +
-        0.1 * themes.opportunity +
-        0.09 * rankWeight(index, factors.length),
+        Math.pow(0.68, index) *
+        (0.08 +
+          0.48 * tokenOverlap(factor, successCorpus) +
+          0.2 * tokenOverlap(factor, constraintCorpus) +
+          0.14 * themes.opportunity +
+          0.1 * Math.pow(rankWeight(index, factors.length), 2)),
     })),
   );
 
@@ -391,37 +532,27 @@ function buildHypeCycleViz(brief: DecisionBrief, themes: ThemeVector): Visualiza
 }
 
 function buildChasmViz(brief: DecisionBrief, themes: ThemeVector): VisualizationSpec {
-  const readiness = bounded(
-    0.24 +
-      0.28 * themes.opportunity +
-      0.18 * themes.resources -
-      0.16 * themes.uncertainty -
-      0.1 * themes.risk +
+  const segments: ChasmVizData["segments"] = CHASM_SEGMENT_SHARES.map((segment) => ({ ...segment }));
+  const chasmRisk = bounded(
+    0.12 +
+      0.3 * themes.uncertainty +
+      0.22 * themes.risk +
+      0.12 * (1 - themes.resources) +
+      0.1 * (1 - themes.opportunity) +
       0.14 * deadlinePressure(brief),
   );
-
-  const segments: ChasmVizData["segments"] = [
-    { segment: "Innovators", adoption: bounded(readiness + 0.32) },
-    { segment: "Early Adopters", adoption: bounded(readiness + 0.2) },
-    { segment: "Early Majority", adoption: bounded(readiness - 0.06) },
-    { segment: "Late Majority", adoption: bounded(readiness - 0.18) },
-    { segment: "Laggards", adoption: bounded(readiness - 0.28) },
-  ];
-
-  const earlyAdopters = segments[1].adoption;
-  const earlyMajority = segments[2].adoption;
 
   return {
     type: "bar",
     title: "Diffusion / Chasm Adoption",
     xLabel: "Adopter Segment",
-    yLabel: "Adoption Readiness",
+    yLabel: "Segment Share",
     vizSchemaVersion: 2,
     data: {
       kind: "chasm_diffusion_model",
       segments,
       chasmAfter: "Early Adopters",
-      gap: round(Math.max(earlyAdopters - earlyMajority, 0), 3),
+      gap: chasmRisk,
     } satisfies ChasmVizData,
   };
 }
@@ -479,6 +610,11 @@ function buildMonteCarloViz(brief: DecisionBrief, themes: ThemeVector): Visualiz
       p10: bounded(mean - 1.2816 * sigma),
       p50: mean,
       p90: bounded(mean + 1.2816 * sigma),
+      metadata: {
+        trials: total,
+        distribution: "gaussian_approximation",
+        correlationMode: "independent_factors",
+      },
     } satisfies MonteCarloVizData,
   };
 }
@@ -495,17 +631,46 @@ function buildConsequencesViz(brief: DecisionBrief, themes: ThemeVector): Visual
   const indirect2 = bounded(indirect1 * 1.14 + 0.1 * themes.stakeholderImpact + 0.06 * themes.uncertainty);
   const indirect3 = bounded(indirect2 * 1.1 + 0.08 * themes.stakeholderImpact);
 
+  const third0 = bounded(0.1 + 0.16 * themes.uncertainty + 0.1 * themes.stakeholderImpact);
+  const third1 = bounded(third0 * 1.25 + 0.08 * themes.risk + 0.06 * themes.uncertainty);
+  const third2 = bounded(third1 * 1.2 + 0.08 * themes.stakeholderImpact + 0.06 * themes.risk);
+  const third3 = bounded(third2 * 1.12 + 0.08 * themes.stakeholderImpact);
+
   const horizons: ConsequencesVizData["horizons"] = [
-    { horizon: "Immediate", direct: direct0, indirect: indirect0, net: round(direct0 - indirect0, 3) },
-    { horizon: "30 Days", direct: direct1, indirect: indirect1, net: round(direct1 - indirect1, 3) },
-    { horizon: "90 Days", direct: direct2, indirect: indirect2, net: round(direct2 - indirect2, 3) },
-    { horizon: "1 Year", direct: direct3, indirect: indirect3, net: round(direct3 - indirect3, 3) },
+    {
+      horizon: "Immediate",
+      direct: direct0,
+      indirect: indirect0,
+      thirdOrder: third0,
+      net: round(direct0 - indirect0 - third0 * 0.5, 3),
+    },
+    {
+      horizon: "30 Days",
+      direct: direct1,
+      indirect: indirect1,
+      thirdOrder: third1,
+      net: round(direct1 - indirect1 - third1 * 0.5, 3),
+    },
+    {
+      horizon: "90 Days",
+      direct: direct2,
+      indirect: indirect2,
+      thirdOrder: third2,
+      net: round(direct2 - indirect2 - third2 * 0.5, 3),
+    },
+    {
+      horizon: "1 Year",
+      direct: direct3,
+      indirect: indirect3,
+      thirdOrder: third3,
+      net: round(direct3 - indirect3 - third3 * 0.5, 3),
+    },
   ];
 
   const links: ConsequencesVizData["links"] = [
-    { from: "Immediate", to: "30 Days", weight: round((indirect0 + indirect1) / 2, 3) },
-    { from: "30 Days", to: "90 Days", weight: round((indirect1 + indirect2) / 2, 3) },
-    { from: "90 Days", to: "1 Year", weight: round((indirect2 + indirect3) / 2, 3) },
+    { from: "Immediate", to: "30 Days", weight: round((indirect0 + third0 + indirect1 + third1) / 4, 3) },
+    { from: "30 Days", to: "90 Days", weight: round((indirect1 + third1 + indirect2 + third2) / 4, 3) },
+    { from: "90 Days", to: "1 Year", weight: round((indirect2 + third2 + indirect3 + third3) / 4, 3) },
   ];
 
   return {
@@ -655,8 +820,12 @@ function buildDoubleLoopViz(brief: DecisionBrief, themes: ThemeVector): Visualiz
     return {
       behavior,
       outcome: outcomes[index % outcomes.length],
-      singleLoopFix: `Tune process around: ${behavior}`,
-      rootAssumption: assumptions[index % assumptions.length],
+      singleLoopFix: `Tune process around ${behavior} using a 1-cycle measurable adjustment.`,
+      rootAssumption: toTestableAssumption(
+        assumptions[index % assumptions.length],
+        outcomes[index % outcomes.length],
+        brief.timeLimit,
+      ),
       leverage,
     };
   });
