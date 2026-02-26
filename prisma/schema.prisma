@@ -1,0 +1,135 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Decision {
+  id                   String                      @id @default(cuid())
+  title                String
+  rawInput             Json
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+  briefs               DecisionBriefRecord[]
+  clarificationRecords ClarificationQuestionRecord[]
+  runs                 AnalysisRun[]
+
+  @@index([createdAt])
+}
+
+model DecisionBriefRecord {
+  id          String   @id @default(cuid())
+  decisionId  String
+  decision    Decision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  version     Int
+  briefJson   Json
+  qualityScore Float?
+  createdAt   DateTime @default(now())
+
+  @@unique([decisionId, version])
+  @@index([decisionId, createdAt])
+}
+
+model ClarificationQuestionRecord {
+  id         String       @id @default(cuid())
+  decisionId String
+  decision   Decision     @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  runId      String?
+  run        AnalysisRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+  questionKey String?
+  generationId String?
+  sequence   Int?
+  question   String
+  rationale  String?
+  answer     String?
+  status     String
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  @@index([decisionId, createdAt])
+  @@index([runId])
+  @@index([decisionId, generationId, sequence])
+  @@index([decisionId, generationId, questionKey])
+}
+
+model AnalysisRun {
+  id              String                      @id @default(cuid())
+  decisionId      String
+  decision        Decision                    @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  provider        String
+  model           String?
+  status          String
+  frameworkIds    Json
+  startedAt       DateTime?
+  endedAt         DateTime?
+  error           String?
+  synthesis       Json?
+  propagatedMap   Json?
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @updatedAt
+  clarificationRecords ClarificationQuestionRecord[]
+  frameworkResults FrameworkResultRecord[]
+  mapEdges        MapEdgeRecord[]
+  exportArtifacts ExportArtifact[]
+
+  @@index([decisionId, createdAt])
+  @@index([status])
+}
+
+model FrameworkDefinition {
+  id            String                 @id
+  name          String
+  category      String
+  maturity      String
+  deepSupported Boolean                @default(false)
+  description   String
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+  results       FrameworkResultRecord[]
+}
+
+model FrameworkResultRecord {
+  id                 String              @id @default(cuid())
+  runId              String
+  run                AnalysisRun         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  frameworkId        String
+  framework          FrameworkDefinition @relation(fields: [frameworkId], references: [id], onDelete: Restrict)
+  resultJson         Json
+  applicabilityScore Float
+  confidence         Float
+  createdAt          DateTime            @default(now())
+
+  @@unique([runId, frameworkId])
+  @@index([frameworkId])
+}
+
+model MapEdgeRecord {
+  id                String      @id @default(cuid())
+  runId             String
+  run               AnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  sourceFrameworkId String
+  targetFrameworkId String
+  relationType      String
+  weight            Float
+  rationale         String?
+  createdAt         DateTime    @default(now())
+
+  @@index([runId])
+  @@index([sourceFrameworkId])
+  @@index([targetFrameworkId])
+}
+
+model ExportArtifact {
+  id        String      @id @default(cuid())
+  runId     String
+  run       AnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  type      String
+  path      String
+  checksum  String
+  createdAt DateTime    @default(now())
+
+  @@index([runId])
+}

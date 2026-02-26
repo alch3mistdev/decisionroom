@@ -6,21 +6,48 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:push": "prisma db push",
+    "db:backfill": "tsx prisma/backfill-clarifications.ts",
+    "db:seed": "tsx prisma/seed.ts",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "@prisma/client": "^6.16.2",
+    "archiver": "^7.0.1",
+    "d3": "^7.9.0",
+    "framer-motion": "^12.34.3",
     "next": "16.1.6",
+    "ollama": "^0.6.3",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "sharp": "^0.34.5",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
     "@tailwindcss/postcss": "^4",
+    "@types/archiver": "^7.0.0",
+    "@types/d3": "^7.4.3",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^4.0.18",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "jsdom": "^27.0.1",
+    "prisma": "^6.16.2",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsx": "^4.21.0",
+    "typescript": "^5",
+    "vitest": "^4.0.18"
   }
 }

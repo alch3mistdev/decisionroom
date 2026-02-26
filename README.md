@@ -1,36 +1,86 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# DecisionRoom V1
 
-## Getting Started
+DecisionRoom is a greenfield Next.js 16 application for decision intelligence workflows:
 
-First, run the development server:
+1. Capture a decision prompt and structured constraints.
+2. Run an LLM-assisted clarification loop to produce a canonical `DecisionBrief`.
+3. Execute multi-framework analysis (Top-12 deep + remaining registry frameworks).
+4. Build a propagated consensus/conflict map across frameworks.
+5. Export markdown and zipped visual assets (`.svg` + `.png`).
+
+## V1 Coverage
+
+- 50 framework registry entries.
+- 12 deep analyzers:
+  - Eisenhower Matrix
+  - SWOT
+  - BCG Matrix
+  - Project Portfolio Matrix
+  - Pareto Principle
+  - Hype Cycle
+  - Chasm/Diffusion
+  - Monte Carlo Simulation
+  - Consequences Model
+  - Crossroads Model
+  - Conflict Resolution Model
+  - Double-Loop Learning
+- Hybrid provider routing:
+  - Local: Ollama
+  - Hosted: Anthropic
+  - Fallback behavior for unavailable providers
+
+## Tech Stack
+
+- Next.js App Router + TypeScript
+- Prisma + SQLite
+- Zod contracts
+- D3 + Framer Motion visual workspace
+- Archiver + Sharp export pipeline
+- Vitest test suite
+
+## Quick Start
 
 ```bash
+npm install
+cp .env.example .env
+npm run db:generate
+npm run db:push
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open: `http://localhost:3000`
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment Variables
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```env
+DATABASE_URL="file:./dev.db"
+ANTHROPIC_API_KEY=""
+ANTHROPIC_MODEL="claude-3-5-sonnet-latest"
+OLLAMA_BASE_URL="http://localhost:11434"
+OLLAMA_MODEL="llama3.2"
+```
 
-## Learn More
+## Key Scripts
 
-To learn more about Next.js, take a look at the following resources:
+- `npm run dev` - development server
+- `npm run build` - production build
+- `npm run lint` - ESLint
+- `npm run typecheck` - TypeScript checks
+- `npm run test` - Vitest
+- `npm run db:push` - sync Prisma schema to SQLite
+- `npm run db:seed` - seed framework definitions
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## API Routes
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `POST /api/decisions`
+- `POST /api/decisions/:id/refine`
+- `POST /api/decisions/:id/analyze`
+- `GET /api/runs/:runId`
+- `GET /api/decisions/:id/results`
+- `GET /api/decisions/:id/export?format=md|zip`
 
-## Deploy on Vercel
+## Notes
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- V1 is single-user and local SQLite by default.
+- Long-running analysis execution is queued in-process for local/dev runtime.
+- Exports are generated on demand and tracked in `ExportArtifact`.
