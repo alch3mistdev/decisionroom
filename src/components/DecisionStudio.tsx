@@ -192,6 +192,7 @@ export function DecisionStudio({ initialDecisionId }: Props) {
   const [showFrameworkSelector, setShowFrameworkSelector] = useState(false);
   const [showFrameworkPanels, setShowFrameworkPanels] = useState(false);
   const [showRelationshipMap, setShowRelationshipMap] = useState(false);
+  const [briefElapsedSeconds, setBriefElapsedSeconds] = useState(0);
 
   const selectedFrameworkArray = useMemo(
     () => Array.from(selectedFrameworkIds.values()),
@@ -389,6 +390,45 @@ export function DecisionStudio({ initialDecisionId }: Props) {
     };
   }, [decisionId, loadResults, runId]);
 
+  useEffect(() => {
+    if (busy !== "brief") {
+      setBriefElapsedSeconds(0);
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setBriefElapsedSeconds((previous) => previous + 1);
+    }, 1000);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, [busy]);
+
+  const waitForBriefFromContext = useCallback(
+    async (targetDecisionId: string, timeoutMs = 45000): Promise<boolean> => {
+      const startedAt = Date.now();
+
+      while (Date.now() - startedAt < timeoutMs) {
+        try {
+          const payload = await fetchJson<DecisionDetailPayload>(`/api/decisions/${targetDecisionId}`);
+          if (payload.brief) {
+            setBrief(payload.brief);
+            setBriefQualityScore(payload.briefQualityScore);
+            return true;
+          }
+        } catch {
+          // Keep polling through transient fetch failures.
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+
+      return false;
+    },
+    [],
+  );
+
   const onCreateDecision = async () => {
     if (!form.prompt.trim()) {
       setError("Decision prompt is required.");
@@ -516,7 +556,23 @@ export function DecisionStudio({ initialDecisionId }: Props) {
       setBrief(payload.decisionBrief);
       setBriefQualityScore(payload.qualityScore);
     } catch (briefError) {
-      setError(getApiErrorMessage(briefError));
+      if (briefError instanceof ApiError && briefError.status === 504) {
+        setError(
+          "Brief generation is taking longer than the gateway timeout. Waiting for completion...",
+        );
+
+        const recovered = await waitForBriefFromContext(decisionId, 60000);
+        if (recovered) {
+          setError(null);
+          return;
+        }
+
+        setError(
+          "Brief generation timed out at the gateway. Try again, or switch provider preference before retrying.",
+        );
+      } else {
+        setError(getApiErrorMessage(briefError));
+      }
     } finally {
       setBusy(null);
     }
@@ -642,6 +698,20 @@ export function DecisionStudio({ initialDecisionId }: Props) {
 
   return (
     <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-6 px-4 py-6 lg:px-10">
+      {busy === "brief" ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900/95 p-5 text-slate-100 shadow-2xl">
+            <h2 className="text-lg font-semibold">Building Decision Brief…</h2>
+            <p className="mt-2 text-sm text-slate-300">
+              This can take up to a minute or more depending on model/provider latency.
+            </p>
+            <p className="mt-3 text-xs text-slate-400">
+              Elapsed: {briefElapsedSeconds}s
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       <section className="relative overflow-hidden rounded-3xl border border-slate-700/70 bg-slate-900/75 p-6 shadow-[0_20px_80px_-42px_rgba(2,132,199,0.65)]">
         <div className="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-sky-500/20 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-24 -left-24 h-72 w-72 rounded-full bg-indigo-500/20 blur-3xl" />

@@ -3,11 +3,33 @@ import type { Prisma } from "@prisma/client";
 import { buildPropagatedDecisionMap, buildSynthesisSummary } from "@/lib/analysis/propagation";
 import { inferDecisionThemeVector } from "@/lib/analysis/theme";
 import { prisma } from "@/lib/db";
-import { analyzeFrameworkWithLLM } from "@/lib/frameworks/analyzers";
-import { listFrameworkDefinitions } from "@/lib/frameworks/registry";
-import { resolveLLM } from "@/lib/llm/router";
+import { env } from "@/lib/env";
+import {
+  ModelOutputInvalidError,
+  ModelTimeoutError,
+  ProviderUnavailableError,
+} from "@/lib/errors";
+import {
+  analyzeFrameworkSimulation,
+  analyzeFrameworkWithLLM,
+  type LLMFrameworkAnalysisContext,
+} from "@/lib/frameworks/analyzers";
+import { getFrameworkDefinition, listFrameworkDefinitions } from "@/lib/frameworks/registry";
+import {
+  getAdapterForResolvedProvider,
+  resolveLLM,
+  type ResolvedLLM,
+} from "@/lib/llm/router";
 import { decisionBriefSchema } from "@/lib/schemas";
-import type { FrameworkId, ProviderPreference, RunStatus } from "@/lib/types";
+import type {
+  DecisionBrief,
+  FrameworkId,
+  FrameworkResult,
+  ProviderPreference,
+  ResolvedProvider,
+  RunStatus,
+  ThemeVector,
+} from "@/lib/types";
 
 const runPromises = new Map<string, Promise<void>>();
 
@@ -66,6 +88,115 @@ function providerToPreference(provider: string): ProviderPreference {
   return "auto";
 }
 
+function isResolvedProvider(provider: string): provider is ResolvedProvider {
+  return provider === "local" || provider === "hosted";
+}
+
+async function resolveRunLLM(provider: string): Promise<ResolvedLLM> {
+  if (isResolvedProvider(provider)) {
+    return getAdapterForResolvedProvider(provider);
+  }
+
+  return resolveLLM(providerToPreference(provider));
+}
+
+function shouldUseLLMForFramework(frameworkId: FrameworkId): boolean {
+  if (env.ANALYSIS_LLM_SCOPE === "all") {
+    return true;
+  }
+
+  return getFrameworkDefinition(frameworkId).deepSupported;
+}
+
+function canFallbackToSimulation(error: unknown): boolean {
+  return (
+    error instanceof ProviderUnavailableError ||
+    error instanceof ModelOutputInvalidError ||
+    error instanceof ModelTimeoutError
+  );
+}
+
+function alternateProviderPreference(provider: string): ProviderPreference | null {
+  if (provider === "local") {
+    return "hosted";
+  }
+  if (provider === "hosted") {
+    return "local";
+  }
+  return null;
+}
+
+async function analyzeFrameworkForRun(
+  frameworkId: FrameworkId,
+  brief: DecisionBrief,
+  decisionThemes: ThemeVector,
+  llm: LLMFrameworkAnalysisContext,
+): Promise<{ result: FrameworkResult; warning?: string }> {
+  if (!shouldUseLLMForFramework(frameworkId)) {
+    return {
+      result: analyzeFrameworkSimulation(frameworkId, brief, decisionThemes),
+    };
+  }
+
+  try {
+    const result = await analyzeFrameworkWithLLM(frameworkId, brief, decisionThemes, llm);
+    return { result };
+  } catch (error) {
+    if (!canFallbackToSimulation(error)) {
+      throw error;
+    }
+
+    const framework = getFrameworkDefinition(frameworkId);
+    const primaryReason = error instanceof Error ? error.message : "Unknown LLM failure";
+    const alternatePreference = alternateProviderPreference(llm.provider);
+    let alternateReason: string | null = null;
+
+    if (alternatePreference) {
+      try {
+        const alternate = await resolveLLM(alternatePreference);
+        if (alternate.provider !== llm.provider) {
+          const alternateResult = await analyzeFrameworkWithLLM(frameworkId, brief, decisionThemes, {
+            adapter: alternate.adapter,
+            provider: alternate.provider,
+            model: alternate.model,
+          });
+
+          const warning = `${framework.name} (${framework.id}) recovered on ${alternate.provider} after ${llm.provider} failure: ${primaryReason}`;
+          return {
+            result: {
+              ...alternateResult,
+              generation: {
+                mode: "llm",
+                provider: alternate.provider,
+                model: alternate.model,
+                warning,
+              },
+            },
+            warning,
+          };
+        }
+      } catch (failoverError) {
+        alternateReason =
+          failoverError instanceof Error ? failoverError.message : "Unknown failover error";
+      }
+    }
+
+    const warning = alternateReason
+      ? `${framework.name} (${framework.id}) fell back to deterministic analysis after ${llm.provider} failure (${primaryReason}) and failover failure (${alternateReason}).`
+      : `${framework.name} (${framework.id}) fell back to deterministic analysis: ${primaryReason}`;
+    const fallbackResult = analyzeFrameworkSimulation(frameworkId, brief, decisionThemes, {
+      provider: llm.provider,
+      model: llm.model,
+      warning,
+    });
+
+    return {
+      result: fallbackResult,
+      warning,
+    };
+  }
+}
+
 async function processRun(runId: string): Promise<void> {
   await ensureFrameworkDefinitionsSeeded();
   await markRun(runId, "analyzing");
@@ -100,7 +231,7 @@ async function processRun(runId: string): Promise<void> {
     throw new Error("No frameworks requested for analysis run.");
   }
 
-  const resolvedLLM = await resolveLLM(providerToPreference(run.provider));
+  const resolvedLLM = await resolveRunLLM(run.provider);
   await prisma.analysisRun.update({
     where: { id: runId },
     data: {
@@ -110,41 +241,73 @@ async function processRun(runId: string): Promise<void> {
   });
 
   const decisionThemes = inferDecisionThemeVector(brief);
-  const frameworkResults = [];
+  const frameworkResults = new Array<FrameworkResult | undefined>(selectedFrameworkIds.length);
+  const warnings: string[] = [];
+  const maxConcurrency = Math.max(
+    1,
+    Math.min(env.ANALYSIS_MAX_CONCURRENCY, selectedFrameworkIds.length),
+  );
+  let nextIndex = 0;
 
-  for (const frameworkId of selectedFrameworkIds) {
-    const result = await analyzeFrameworkWithLLM(frameworkId, brief, decisionThemes, {
-      adapter: resolvedLLM.adapter,
-      provider: resolvedLLM.provider,
-      model: resolvedLLM.model,
-    });
-    frameworkResults.push(result);
+  await Promise.all(
+    Array.from({ length: maxConcurrency }, async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= selectedFrameworkIds.length) {
+          return;
+        }
 
-    await prisma.frameworkResultRecord.upsert({
-      where: {
-        runId_frameworkId: {
-          runId,
-          frameworkId,
-        },
-      },
-      update: {
-        resultJson: result as unknown as Prisma.InputJsonValue,
-        applicabilityScore: result.applicabilityScore,
-        confidence: result.confidence,
-      },
-      create: {
-        runId,
-        frameworkId,
-        resultJson: result as unknown as Prisma.InputJsonValue,
-        applicabilityScore: result.applicabilityScore,
-        confidence: result.confidence,
-      },
-    });
+        const frameworkId = selectedFrameworkIds[index];
+        const analyzed = await analyzeFrameworkForRun(frameworkId, brief, decisionThemes, {
+          adapter: resolvedLLM.adapter,
+          provider: resolvedLLM.provider,
+          model: resolvedLLM.model,
+        });
+
+        frameworkResults[index] = analyzed.result;
+        if (analyzed.warning) {
+          warnings.push(analyzed.warning);
+        }
+
+        await prisma.frameworkResultRecord.upsert({
+          where: {
+            runId_frameworkId: {
+              runId,
+              frameworkId,
+            },
+          },
+          update: {
+            resultJson: analyzed.result as unknown as Prisma.InputJsonValue,
+            applicabilityScore: analyzed.result.applicabilityScore,
+            confidence: analyzed.result.confidence,
+          },
+          create: {
+            runId,
+            frameworkId,
+            resultJson: analyzed.result as unknown as Prisma.InputJsonValue,
+            applicabilityScore: analyzed.result.applicabilityScore,
+            confidence: analyzed.result.confidence,
+          },
+        });
+      }
+    }),
+  );
+
+  if (frameworkResults.some((result) => !result)) {
+    throw new Error("Analysis run completed with missing framework results.");
   }
 
+  const completedFrameworkResults = frameworkResults as FrameworkResult[];
+
   await markRun(runId, "synthesizing");
-  const propagatedMap = buildPropagatedDecisionMap(frameworkResults);
-  const synthesis = buildSynthesisSummary(brief, frameworkResults, propagatedMap);
+  const propagatedMap = buildPropagatedDecisionMap(completedFrameworkResults);
+  const synthesis = buildSynthesisSummary(
+    brief,
+    completedFrameworkResults,
+    propagatedMap,
+    warnings,
+  );
 
   await prisma.$transaction(async (transaction) => {
     await transaction.mapEdgeRecord.deleteMany({ where: { runId } });

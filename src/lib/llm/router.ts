@@ -13,6 +13,22 @@ export interface ResolvedLLM {
   model: string;
 }
 
+export function getAdapterForResolvedProvider(provider: ResolvedProvider): ResolvedLLM {
+  if (provider === "local") {
+    return {
+      provider,
+      adapter: ollamaAdapter,
+      model: ollamaAdapter.model,
+    };
+  }
+
+  return {
+    provider,
+    adapter: anthropicAdapter,
+    model: anthropicAdapter.model,
+  };
+}
+
 async function resolveLocal(): Promise<ResolvedLLM | null> {
   if (await ollamaAdapter.isHealthy()) {
     return {

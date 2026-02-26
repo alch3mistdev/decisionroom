@@ -278,6 +278,7 @@ export function buildSynthesisSummary(
   brief: DecisionBrief,
   frameworkResults: FrameworkResult[],
   propagatedMap: PropagatedDecisionMap,
+  warnings: string[] = [],
 ): SynthesisSummary {
   const ranked = frameworkResults
     .map((result) => ({
@@ -313,5 +314,6 @@ export function buildSynthesisSummary(
     recommendedActions,
     checkpoints,
     decisionRecommendation,
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }

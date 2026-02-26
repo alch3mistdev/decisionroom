@@ -17,6 +17,11 @@ export function RecommendationStep({
   displayedFrameworkResults,
   frameworkOptions,
 }: RecommendationViewProps) {
+  const fallbackCount = results.frameworkResults.filter(
+    (framework) => framework.generation?.mode === "fallback",
+  ).length;
+  const warnings = results.synthesis.warnings ?? [];
+
   return (
     <motion.section
       initial={{ opacity: 0, y: 12 }}
@@ -52,6 +57,22 @@ export function RecommendationStep({
           ) : null}
         </div>
       </div>
+
+      {fallbackCount > 0 || warnings.length > 0 ? (
+        <section className="rounded-2xl border border-amber-500/45 bg-amber-500/10 p-4 text-sm text-amber-100">
+          <p className="font-semibold">
+            Analysis completed with fallback outputs ({fallbackCount} framework
+            {fallbackCount === 1 ? "" : "s"}).
+          </p>
+          {warnings.length > 0 ? (
+            <ul className="mt-2 space-y-1 text-xs text-amber-50">
+              {warnings.slice(0, 8).map((warning) => (
+                <li key={warning}>• {warning}</li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
 
       {recommendation ? (
         <>

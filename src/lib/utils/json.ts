@@ -14,6 +14,86 @@ function sanitizeJsonLike(input: string): string {
     .replaceAll(/:\s*'([^'\\]*(?:\\.[^'\\]*)*)'/g, ': "$1"');
 }
 
+function repairIncompleteJsonCandidate(input: string): string {
+  const source = input.trim();
+  const startObject = source.indexOf("{");
+  const startArray = source.indexOf("[");
+  const start =
+    startObject === -1
+      ? startArray
+      : startArray === -1
+        ? startObject
+        : Math.min(startObject, startArray);
+
+  if (start === -1) {
+    return source;
+  }
+
+  const candidate = source.slice(start);
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  let repaired = "";
+
+  for (const char of candidate) {
+    if (escaped) {
+      escaped = false;
+      repaired += char;
+      continue;
+    }
+
+    if (char === "\\") {
+      escaped = true;
+      repaired += char;
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = !inString;
+      repaired += char;
+      continue;
+    }
+
+    if (inString) {
+      repaired += char;
+      continue;
+    }
+
+    if (char === "{") {
+      stack.push("}");
+      repaired += char;
+      continue;
+    }
+
+    if (char === "[") {
+      stack.push("]");
+      repaired += char;
+      continue;
+    }
+
+    if (char === "}" || char === "]") {
+      const expected = stack.at(-1);
+      if (expected === char) {
+        stack.pop();
+        repaired += char;
+      }
+      continue;
+    }
+
+    repaired += char;
+  }
+
+  if (inString) {
+    repaired += "\"";
+  }
+
+  while (stack.length > 0) {
+    repaired += stack.pop();
+  }
+
+  return repaired;
+}
+
 function extractFirstJsonCandidate(input: string): string {
   const startObject = input.indexOf("{");
   const startArray = input.indexOf("[");
@@ -77,15 +157,46 @@ export function parseJsonFromText(input: string): unknown {
     throw new Error("Empty model response");
   }
 
+  const parseAttempts: string[] = [];
+  parseAttempts.push(trimmed);
+
   try {
-    return JSON.parse(trimmed);
+    parseAttempts.push(extractFirstJsonCandidate(trimmed));
   } catch {
-    const candidate = extractFirstJsonCandidate(trimmed);
+    parseAttempts.push(repairIncompleteJsonCandidate(trimmed));
+  }
+
+  for (const attempt of parseAttempts) {
+    if (!attempt) {
+      continue;
+    }
+
     try {
-      return JSON.parse(candidate);
+      return JSON.parse(attempt);
     } catch {
-      const sanitized = sanitizeJsonLike(candidate);
-      return JSON.parse(sanitized);
+      // Continue to sanitization/repair passes.
+    }
+
+    try {
+      return JSON.parse(sanitizeJsonLike(attempt));
+    } catch {
+      // Continue to repaired parse pass.
+    }
+
+    const repaired = repairIncompleteJsonCandidate(attempt);
+    try {
+      return JSON.parse(repaired);
+    } catch {
+      // Continue to sanitized repaired parse.
+    }
+
+    const repairedSanitized = sanitizeJsonLike(repaired);
+    try {
+      return JSON.parse(repairedSanitized);
+    } catch {
+      // Continue with next attempt source.
     }
   }
+
+  throw new Error("Failed to parse JSON from model response");
 }

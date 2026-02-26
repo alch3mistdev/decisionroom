@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { ModelOutputInvalidError } from "@/lib/errors";
+import { ModelOutputInvalidError, ModelTimeoutError } from "@/lib/errors";
 import {
   clarificationAnswerSchema,
   clarificationQuestionSchema,
@@ -20,6 +20,8 @@ interface QaPair {
   question: string;
   answer: string;
 }
+
+type ResolvedLLM = Awaited<ReturnType<typeof resolveLLM>>;
 
 const rawClarificationQuestionSchema = z.object({
   id: z.string().trim().min(1).max(120).optional(),
@@ -111,20 +113,34 @@ function fallbackQuestions(input: CreateDecisionInput): ClarificationQuestion[] 
     });
   }
 
-  if (questions.length < 3) {
-    questions.push({
+  const supplementalQuestions: ClarificationQuestion[] = [
+    {
       id: "tradeoffs",
       question: "What tradeoff is acceptable if your preferred option underperforms?",
       rationale: "Tradeoff boundaries improve recommendation robustness.",
-    });
-  }
-
-  if (questions.length < 3) {
-    questions.push({
+    },
+    {
       id: "signals",
       question: "What early signals would tell you the decision is working?",
       rationale: "Leading indicators reduce decision regret and enable quick adjustments.",
-    });
+    },
+    {
+      id: "owners",
+      question: "Who owns each critical execution step and decision checkpoint?",
+      rationale: "Clear ownership reduces coordination failures and execution drift.",
+    },
+  ];
+
+  for (const supplemental of supplementalQuestions) {
+    if (questions.length >= 3) {
+      break;
+    }
+
+    if (questions.some((question) => question.id === supplemental.id)) {
+      continue;
+    }
+
+    questions.push(supplemental);
   }
 
   return questions.slice(0, 6);
@@ -333,6 +349,59 @@ function normalizeClarificationQuestions(
   return normalized;
 }
 
+function isStructuredRecoveryError(error: unknown): boolean {
+  return error instanceof ModelOutputInvalidError || error instanceof ModelTimeoutError;
+}
+
+async function resolveAlternateLLM(
+  preference: ProviderPreference,
+  currentProvider: string,
+): Promise<ResolvedLLM | null> {
+  if (preference !== "auto") {
+    return null;
+  }
+
+  const alternatePreference =
+    currentProvider === "local"
+      ? "hosted"
+      : currentProvider === "hosted"
+        ? "local"
+        : null;
+
+  if (!alternatePreference) {
+    return null;
+  }
+
+  try {
+    const alternate = await resolveLLM(alternatePreference);
+    if (alternate.provider === currentProvider) {
+      return null;
+    }
+    return alternate;
+  } catch {
+    return null;
+  }
+}
+
+async function generateClarificationQuestionsWithProvider(
+  input: CreateDecisionInput,
+  llm: ResolvedLLM,
+): Promise<ClarificationQuestion[]> {
+  let questions: ClarificationQuestion[] = [];
+
+  try {
+    questions = await requestClarificationQuestions(input, llm.adapter.generateJson.bind(llm.adapter), "first");
+  } catch (error) {
+    if (!(error instanceof ModelOutputInvalidError)) {
+      throw error;
+    }
+
+    questions = await requestClarificationQuestions(input, llm.adapter.generateJson.bind(llm.adapter), "retry");
+  }
+
+  return clarificationQuestionSchema.array().min(3).max(6).parse(questions);
+}
+
 async function requestClarificationQuestions(
   input: CreateDecisionInput,
   generate: <T>(request: {
@@ -457,29 +526,36 @@ export async function generateClarificationQuestions(
   input: CreateDecisionInput,
   preference: ProviderPreference = "auto",
 ): Promise<{ questions: ClarificationQuestion[]; provider: string; fallback: boolean; model: string }> {
-  const { adapter, provider, model } = await resolveLLM(preference);
+  const primaryLLM = await resolveLLM(preference);
   try {
-    let questions: ClarificationQuestion[] = [];
-
-    try {
-      questions = await requestClarificationQuestions(input, adapter.generateJson.bind(adapter), "first");
-    } catch (error) {
-      if (!(error instanceof ModelOutputInvalidError)) {
-        throw error;
-      }
-
-      questions = await requestClarificationQuestions(input, adapter.generateJson.bind(adapter), "retry");
-    }
+    const questions = await generateClarificationQuestionsWithProvider(input, primaryLLM);
 
     return {
-      questions: clarificationQuestionSchema.array().min(3).max(6).parse(questions),
-      provider,
+      questions,
+      provider: primaryLLM.provider,
       fallback: false,
-      model,
+      model: primaryLLM.model,
     };
-  } catch (error) {
-    if (!(error instanceof ModelOutputInvalidError)) {
-      throw error;
+  } catch (primaryError) {
+    if (!isStructuredRecoveryError(primaryError)) {
+      throw primaryError;
+    }
+
+    const alternateLLM = await resolveAlternateLLM(preference, primaryLLM.provider);
+    if (alternateLLM) {
+      try {
+        const alternateQuestions = await generateClarificationQuestionsWithProvider(input, alternateLLM);
+        return {
+          questions: alternateQuestions,
+          provider: alternateLLM.provider,
+          fallback: false,
+          model: alternateLLM.model,
+        };
+      } catch (alternateError) {
+        if (!isStructuredRecoveryError(alternateError)) {
+          throw alternateError;
+        }
+      }
     }
 
     const usedIds = new Set<string>();
@@ -494,7 +570,7 @@ export async function generateClarificationQuestions(
       questions: clarificationQuestionSchema.array().min(3).max(6).parse(recovered),
       provider: "heuristic_recovery",
       fallback: true,
-      model,
+      model: primaryLLM.model,
     };
   }
 }
@@ -504,29 +580,50 @@ export async function generateDecisionBrief(
   qaPairs: QaPair[],
   preference: ProviderPreference = "auto",
 ): Promise<{ decisionBrief: DecisionBrief; provider: string; fallback: boolean; model: string }> {
-  const { adapter, provider, model } = await resolveLLM(preference);
+  const primaryLLM = await resolveLLM(preference);
 
-  const decisionBrief = await adapter.generateJson({
-    systemPrompt:
-      "You are a senior strategy advisor. Convert raw decision context into a structured execution-ready brief.",
-    userPrompt: [
-      "Return a JSON object that follows the required schema.",
-      "Do not use markdown.",
-      "Include an alternatives array with at least 2 concrete options.",
-      `Intake: ${JSON.stringify(input)}`,
-      `Clarifications: ${JSON.stringify(qaPairs)}`,
-    ].join("\n"),
-    schema: decisionBriefSchema,
-    temperature: 0.1,
-    maxTokens: 1800,
-  });
+  const buildBrief = async (llm: ResolvedLLM) =>
+    llm.adapter.generateJson({
+      systemPrompt:
+        "You are a senior strategy advisor. Convert raw decision context into a structured execution-ready brief.",
+      userPrompt: [
+        "Return a JSON object that follows the required schema.",
+        "Do not use markdown.",
+        "Include an alternatives array with at least 2 concrete options.",
+        `Intake: ${JSON.stringify(input)}`,
+        `Clarifications: ${JSON.stringify(qaPairs)}`,
+      ].join("\n"),
+      schema: decisionBriefSchema,
+      temperature: 0.1,
+      maxTokens: 1800,
+    });
 
-  return {
-    decisionBrief,
-    provider,
-    fallback: false,
-    model,
-  };
+  try {
+    const decisionBrief = await buildBrief(primaryLLM);
+    return {
+      decisionBrief,
+      provider: primaryLLM.provider,
+      fallback: false,
+      model: primaryLLM.model,
+    };
+  } catch (primaryError) {
+    if (!isStructuredRecoveryError(primaryError)) {
+      throw primaryError;
+    }
+
+    const alternateLLM = await resolveAlternateLLM(preference, primaryLLM.provider);
+    if (alternateLLM) {
+      const decisionBrief = await buildBrief(alternateLLM);
+      return {
+        decisionBrief,
+        provider: alternateLLM.provider,
+        fallback: false,
+        model: alternateLLM.model,
+      };
+    }
+
+    throw primaryError;
+  }
 }
 
 export async function suggestClarificationAnswers(
@@ -534,29 +631,62 @@ export async function suggestClarificationAnswers(
   questions: ClarificationQuestion[],
   preference: ProviderPreference = "auto",
 ): Promise<{ suggestions: ClarificationAnswer[]; provider: string; fallback: boolean; model: string }> {
-  const { adapter, provider, model } = await resolveLLM(preference);
+  const primaryLLM = await resolveLLM(preference);
 
-  const llmSuggestions = await adapter.generateJson({
-    systemPrompt:
-      "You are a pragmatic decision advisor. Provide practical, forward-moving draft answers to clarification questions.",
-    userPrompt: [
-      "Return JSON array: [{id, answer}] with one answer per question id.",
-      "Answers must be concise (1-2 sentences), actionable, and include assumptions when data is missing.",
-      "Do not copy input fields verbatim; synthesize them into sensible guidance.",
-      `Decision intake JSON: ${JSON.stringify(input)}`,
-      `Questions: ${JSON.stringify(questions)}`,
-    ].join("\n"),
-    schema: clarificationAnswerSchema.array().min(questions.length).max(questions.length),
-    temperature: 0.2,
-    maxTokens: 1200,
-  });
+  const suggestWithProvider = async (llm: ResolvedLLM) =>
+    llm.adapter.generateJson({
+      systemPrompt:
+        "You are a pragmatic decision advisor. Provide practical, forward-moving draft answers to clarification questions.",
+      userPrompt: [
+        "Return JSON array: [{id, answer}] with one answer per question id.",
+        "Answers must be concise (1-2 sentences), actionable, and include assumptions when data is missing.",
+        "Do not copy input fields verbatim; synthesize them into sensible guidance.",
+        `Decision intake JSON: ${JSON.stringify(input)}`,
+        `Questions: ${JSON.stringify(questions)}`,
+      ].join("\n"),
+      schema: clarificationAnswerSchema.array().min(questions.length).max(questions.length),
+      temperature: 0.2,
+      maxTokens: 1200,
+    });
 
-  return {
-    suggestions: normalizeSuggestions(questions, llmSuggestions),
-    provider,
-    fallback: false,
-    model,
-  };
+  try {
+    const llmSuggestions = await suggestWithProvider(primaryLLM);
+
+    return {
+      suggestions: normalizeSuggestions(questions, llmSuggestions),
+      provider: primaryLLM.provider,
+      fallback: false,
+      model: primaryLLM.model,
+    };
+  } catch (primaryError) {
+    if (!isStructuredRecoveryError(primaryError)) {
+      throw primaryError;
+    }
+
+    const alternateLLM = await resolveAlternateLLM(preference, primaryLLM.provider);
+    if (alternateLLM) {
+      try {
+        const alternateSuggestions = await suggestWithProvider(alternateLLM);
+        return {
+          suggestions: normalizeSuggestions(questions, alternateSuggestions),
+          provider: alternateLLM.provider,
+          fallback: false,
+          model: alternateLLM.model,
+        };
+      } catch (alternateError) {
+        if (!isStructuredRecoveryError(alternateError)) {
+          throw alternateError;
+        }
+      }
+    }
+
+    return {
+      suggestions: fallbackSuggestions(input, questions),
+      provider: "heuristic_recovery",
+      fallback: true,
+      model: primaryLLM.model,
+    };
+  }
 }
 
 export function generateClarificationQuestionsSimulation(

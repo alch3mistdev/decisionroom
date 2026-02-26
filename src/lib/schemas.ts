@@ -127,6 +127,56 @@ export const frameworkResultSchema = z.object({
   themes: themeVectorSchema,
   vizPayload: visualizationSpecSchema,
   deepSupported: z.boolean(),
+  generation: z
+    .object({
+      mode: z.enum(["llm", "fallback"]),
+      provider: z.string().min(1).max(160).optional(),
+      model: z.string().min(1).max(200).optional(),
+      warning: z.string().min(1).max(800).optional(),
+    })
+    .optional(),
+});
+
+const decisionOptionScoreSchema = z.object({
+  option: z.string().min(1).max(200),
+  score: z.number().min(0).max(1),
+  confidence: z.number().min(0).max(1),
+  rationale: z.string().min(1).max(600),
+});
+
+const decisionRecommendationSchema = z.object({
+  recommendedOption: z.string().min(1).max(200),
+  confidence: z.number().min(0).max(1),
+  rationale: z.string().min(1).max(800),
+  tradeoffs: z.array(z.string().min(1).max(500)).max(20),
+  nextActions: z.array(z.string().min(1).max(500)).max(20),
+  optionScores: z.array(decisionOptionScoreSchema).min(1).max(20),
+});
+
+export const synthesisSummarySchema = z.object({
+  topFrameworks: z
+    .array(
+      z.object({
+        frameworkId: frameworkIdSchema,
+        frameworkName: z.string().min(1).max(200),
+        compositeScore: z.number().min(0).max(1),
+        reason: z.string().min(1).max(600),
+      }),
+    )
+    .max(12),
+  contradictions: z
+    .array(
+      z.object({
+        sourceFrameworkId: frameworkIdSchema,
+        targetFrameworkId: frameworkIdSchema,
+        reason: z.string().min(1).max(600),
+      }),
+    )
+    .max(40),
+  recommendedActions: z.array(z.string().min(1).max(500)).max(30),
+  checkpoints: z.array(z.string().min(1).max(500)).max(30),
+  decisionRecommendation: decisionRecommendationSchema.optional(),
+  warnings: z.array(z.string().min(1).max(800)).max(100).optional(),
 });
 
 export function parseDelimited(value?: string): string[] {

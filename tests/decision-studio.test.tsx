@@ -233,4 +233,116 @@ describe("DecisionStudio flow", () => {
       expect(screen.getByText("Decision Recommendation")).toBeInTheDocument();
     }, { timeout: 4500 });
   });
+
+  it("shows brief-building modal and recovers from gateway timeout by polling decision context", async () => {
+    let contextPollCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/decisions") && init?.method === "POST") {
+        return jsonResponse({ decisionId: "decision-3" });
+      }
+
+      if (url.endsWith("/api/decisions/decision-3/refine") && init?.method === "POST") {
+        const body = init.body ? JSON.parse(String(init.body)) : {};
+        if (body.mode === "generate_questions") {
+          return jsonResponse({
+            questions: [
+              { id: "q_1", question: "Question 1", rationale: "R1" },
+              { id: "q_2", question: "Question 2", rationale: "R2" },
+              { id: "q_3", question: "Question 3", rationale: "R3" },
+            ],
+          });
+        }
+        if (body.mode === "submit_answers") {
+          return jsonResponse(
+            {
+              error: "Gateway Timeout",
+              code: "GATEWAY_TIMEOUT",
+            },
+            504,
+          );
+        }
+      }
+
+      if (url.endsWith("/api/decisions/decision-3")) {
+        contextPollCount += 1;
+        if (contextPollCount < 2) {
+          return jsonResponse({
+            decision: {
+              id: "decision-3",
+              title: "Decision",
+              createdAt: "2026-02-01T00:00:00.000Z",
+              updatedAt: "2026-02-02T00:00:00.000Z",
+              input: {
+                prompt: "Should we launch now?",
+              },
+            },
+            brief: null,
+            briefQualityScore: null,
+            clarifications: null,
+            latestRun: null,
+          });
+        }
+
+        return jsonResponse({
+          decision: {
+            id: "decision-3",
+            title: "Decision",
+            createdAt: "2026-02-01T00:00:00.000Z",
+            updatedAt: "2026-02-02T00:00:00.000Z",
+            input: {
+              prompt: "Should we launch now?",
+            },
+          },
+          brief: {
+            title: "Decision",
+            decisionStatement: "Should we launch now with a guided pilot rollout?",
+            context: "Context describing constraints and readiness in detail.",
+            alternatives: ["Pilot", "Delay"],
+            constraints: ["No downtime"],
+            deadline: null,
+            stakeholders: ["Ops"],
+            successCriteria: ["KPI"],
+            riskTolerance: "medium",
+            budget: null,
+            timeLimit: null,
+            assumptions: ["Assumption 1", "Assumption 2"],
+            openQuestions: ["Question"],
+            executionSteps: ["Step 1", "Step 2", "Step 3"],
+          },
+          briefQualityScore: 0.8,
+          clarifications: null,
+          latestRun: null,
+        });
+      }
+
+      return jsonResponse({ error: `Unexpected URL ${url}` }, 500);
+    });
+
+    render(<DecisionStudio />);
+
+    const prompt = screen.getByPlaceholderText("What decision are you trying to make, and why now?");
+    await userEvent.type(prompt, "Should we ship the pilot this quarter?");
+    await userEvent.click(screen.getByRole("button", { name: "Create Decision + Start Clarification" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Question 1")).toBeInTheDocument();
+    });
+
+    const answerInputs = screen.getAllByPlaceholderText("Answer");
+    await userEvent.type(answerInputs[0], "Answer one");
+    await userEvent.type(answerInputs[1], "Answer two");
+    await userEvent.type(answerInputs[2], "Answer three");
+
+    await userEvent.click(screen.getByRole("button", { name: "Build Brief" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Building Decision Brief…")).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("3. Decision Brief")).toBeInTheDocument();
+    }, { timeout: 5000 });
+  });
 });

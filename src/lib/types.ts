@@ -151,6 +151,13 @@ export interface VisualizationSpec {
   data: unknown;
 }
 
+export interface FrameworkGenerationMetadata {
+  mode: "llm" | "fallback";
+  provider?: string;
+  model?: string;
+  warning?: string;
+}
+
 export interface FrameworkResult {
   frameworkId: FrameworkId;
   frameworkName: string;
@@ -163,6 +170,7 @@ export interface FrameworkResult {
   themes: ThemeVector;
   vizPayload: VisualizationSpec;
   deepSupported: boolean;
+  generation?: FrameworkGenerationMetadata;
 }
 
 export interface PropagatedMapNode {
@@ -206,6 +214,7 @@ export interface SynthesisSummary {
   recommendedActions: string[];
   checkpoints: string[];
   decisionRecommendation?: DecisionRecommendation;
+  warnings?: string[];
 }
 
 export interface DecisionOptionScore {

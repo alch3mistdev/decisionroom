@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ModelOutputInvalidError } from "@/lib/errors";
+import { resolveLLM } from "@/lib/llm/router";
 import {
   generateClarificationQuestions,
   generateDecisionBrief,
@@ -35,6 +36,17 @@ const input: CreateDecisionInput = {
 describe("refinement flow", () => {
   beforeEach(() => {
     generateJson.mockReset();
+    vi.mocked(resolveLLM).mockReset();
+    vi.mocked(resolveLLM).mockImplementation(async () => ({
+      provider: "hosted",
+      model: "claude-test",
+      adapter: {
+        name: "anthropic",
+        model: "claude-test",
+        isHealthy: async () => true,
+        generateJson,
+      },
+    }));
   });
 
   it("generates clarification questions", async () => {
@@ -65,6 +77,75 @@ describe("refinement flow", () => {
     expect(result.fallback).toBe(true);
     expect(result.provider).toBe("heuristic_recovery");
     expect(result.questions.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("guarantees at least 3 fallback clarification questions even with complete intake", async () => {
+    generateJson.mockRejectedValue(
+      new ModelOutputInvalidError("Malformed output", { provider: "ollama" }),
+    );
+
+    const completeInput: CreateDecisionInput = {
+      title: "Launch decision",
+      prompt: "Should we launch the new workflow automation to all enterprise customers this quarter?",
+      alternatives: "Pilot with 3 customers, phased rollout, full rollout",
+      constraints: "No downtime, maintain compliance",
+      deadline: "End of quarter",
+      stakeholders: "Ops, Security, Product",
+      successCriteria: "Reduce cycle time by 20%",
+      riskTolerance: "medium",
+      budget: "$200k",
+      timeLimit: "12 weeks",
+    };
+
+    const result = await generateClarificationQuestions(completeInput, "auto");
+
+    expect(result.fallback).toBe(true);
+    expect(result.questions.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("fails over from local to hosted in auto mode before heuristic fallback", async () => {
+    const localGenerate = vi
+      .fn()
+      .mockRejectedValue(new ModelOutputInvalidError("Malformed local output"));
+    const hostedGenerate = vi.fn().mockResolvedValue({
+      questions: [
+        { id: "q1", question: "What options are viable?", rationale: "Need options." },
+        { id: "q2", question: "What constraints apply?", rationale: "Need constraints." },
+        { id: "q3", question: "How will success be measured?", rationale: "Need KPIs." },
+      ],
+    });
+    vi.mocked(resolveLLM).mockImplementation(async (preference) => {
+      if (preference === "auto" || preference === "local") {
+        return {
+          provider: "local",
+          model: "llama3.2",
+          adapter: {
+            name: "ollama",
+            model: "llama3.2",
+            isHealthy: async () => true,
+            generateJson: localGenerate,
+          },
+        };
+      }
+
+      return {
+        provider: "hosted",
+        model: "claude-test",
+        adapter: {
+          name: "anthropic",
+          model: "claude-test",
+          isHealthy: async () => true,
+          generateJson: hostedGenerate,
+        },
+      };
+    });
+
+    const result = await generateClarificationQuestions(input, "auto");
+
+    expect(result.fallback).toBe(false);
+    expect(result.provider).toBe("hosted");
+    expect(result.questions.length).toBeGreaterThanOrEqual(3);
+    expect(hostedGenerate).toHaveBeenCalled();
   });
 
   it("builds a decision brief and quality score", async () => {
@@ -134,5 +215,33 @@ describe("refinement flow", () => {
     expect(
       suggestionResult.suggestions.every((item, index) => item.answer !== questions[index].question),
     ).toBe(true);
+  });
+
+  it("falls back to heuristic suggestions when model output is invalid", async () => {
+    const questions: ClarificationQuestion[] = [
+      {
+        id: "alternatives",
+        question: "What are the top options you are considering?",
+        rationale: "Need explicit options to compare.",
+      },
+      {
+        id: "constraints",
+        question: "What hard constraints cannot be violated?",
+        rationale: "Constraint boundaries narrow the feasible set.",
+      },
+      {
+        id: "success",
+        question: "How will you define success?",
+        rationale: "Decision quality requires measurable outcomes.",
+      },
+    ];
+    generateJson.mockRejectedValue(new ModelOutputInvalidError("Malformed suggestions"));
+
+    const suggestionResult = await suggestClarificationAnswers(input, questions, "auto");
+
+    expect(suggestionResult.fallback).toBe(true);
+    expect(suggestionResult.provider).toBe("heuristic_recovery");
+    expect(suggestionResult.suggestions).toHaveLength(3);
+    expect(suggestionResult.suggestions.every((item) => item.answer.trim().length > 0)).toBe(true);
   });
 });

@@ -34,6 +34,12 @@ export interface LLMFrameworkAnalysisContext {
   model: string;
 }
 
+interface FrameworkSimulationOptions {
+  provider?: string;
+  model?: string;
+  warning?: string;
+}
+
 const THEME_KEYS: Array<keyof ThemeVector> = [
   "risk",
   "urgency",
@@ -632,10 +638,30 @@ const deepAnalyzerMap: Partial<Record<FrameworkId, (context: AnalyzerContext, se
   double_loop_learning: deepDoubleLoop,
 };
 
+function compactBriefForPrompt(brief: DecisionBrief): Record<string, unknown> {
+  return {
+    title: brief.title,
+    decisionStatement: brief.decisionStatement,
+    context: brief.context.slice(0, 1400),
+    alternatives: brief.alternatives.slice(0, 6),
+    constraints: brief.constraints.slice(0, 8),
+    deadline: brief.deadline,
+    stakeholders: brief.stakeholders.slice(0, 8),
+    successCriteria: brief.successCriteria.slice(0, 8),
+    riskTolerance: brief.riskTolerance,
+    budget: brief.budget,
+    timeLimit: brief.timeLimit,
+    assumptions: brief.assumptions.slice(0, 6),
+    openQuestions: brief.openQuestions.slice(0, 6),
+    executionSteps: brief.executionSteps.slice(0, 8),
+  };
+}
+
 export function analyzeFrameworkSimulation(
   frameworkId: FrameworkId,
   brief: DecisionBrief,
   decisionThemes: ThemeVector,
+  options?: FrameworkSimulationOptions,
 ): FrameworkResult {
   const framework = getFrameworkDefinition(frameworkId);
   const seed = `${frameworkId}:${brief.title}:${brief.decisionStatement}`;
@@ -675,6 +701,12 @@ export function analyzeFrameworkSimulation(
     themes,
     vizPayload: parts.vizPayload,
     deepSupported: TOP_12_DEEP_FRAMEWORKS.has(frameworkId),
+    generation: {
+      mode: "fallback",
+      provider: options?.provider ?? "simulation",
+      model: options?.model,
+      warning: options?.warning,
+    },
   };
 }
 
@@ -702,12 +734,12 @@ export async function analyzeFrameworkWithLLM(
       `Framework deep supported: ${framework.deepSupported}`,
       `Framework theme weights: ${JSON.stringify(framework.themeWeights)}`,
       `Decision themes: ${JSON.stringify(decisionThemes)}`,
-      `Decision brief: ${JSON.stringify(brief)}`,
+      `Decision brief compact: ${JSON.stringify(compactBriefForPrompt(brief))}`,
       "Return JSON only.",
     ].join("\n"),
     schema: frameworkAnalysisLLMSchema,
     temperature: 0.15,
-    maxTokens: 1700,
+    maxTokens: 1000,
   });
 
   const blendedApplicability = clamp(generated.applicabilityScore * 0.8 + fitScore * 0.2);
@@ -725,6 +757,11 @@ export async function analyzeFrameworkWithLLM(
     themes: normalizeThemeVector(generated.themes),
     vizPayload: generated.vizPayload,
     deepSupported: TOP_12_DEEP_FRAMEWORKS.has(frameworkId),
+    generation: {
+      mode: "llm",
+      provider: llm.provider,
+      model: llm.model,
+    },
   };
 }
 

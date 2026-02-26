@@ -2,7 +2,7 @@ import { ZodError } from "zod";
 
 import { getDecisionWithLatestBrief, getLatestCompleteRun } from "@/lib/decisions";
 import { badRequest, handleRouteError, notFound, ok } from "@/lib/http";
-import { decisionBriefSchema, frameworkResultSchema } from "@/lib/schemas";
+import { decisionBriefSchema, frameworkResultSchema, synthesisSummarySchema } from "@/lib/schemas";
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -29,12 +29,13 @@ export async function GET(_request: Request, context: RouteContext) {
 
     const brief = decisionBriefSchema.parse(briefRecord.briefJson);
     const frameworkResults = run.frameworkResults.map((record) => frameworkResultSchema.parse(record.resultJson));
+    const synthesis = synthesisSummarySchema.parse(run.synthesis);
 
     return ok({
       brief,
       frameworkResults,
       propagatedMap: run.propagatedMap,
-      synthesis: run.synthesis,
+      synthesis,
       runId: run.id,
       provider: run.provider,
       model: run.model,
