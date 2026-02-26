@@ -55,9 +55,10 @@ Open: `http://localhost:3000`
 ```env
 DATABASE_URL="file:./dev.db"
 ANTHROPIC_API_KEY=""
-ANTHROPIC_MODEL="claude-3-5-sonnet-latest"
+ANTHROPIC_MODEL="claude-sonnet-4-5"
 OLLAMA_BASE_URL="http://localhost:11434"
 OLLAMA_MODEL="llama3.2"
+LLM_AUTO_PRIORITY="local_first"
 ANALYSIS_MAX_CONCURRENCY="4"
 ANALYSIS_LLM_SCOPE="deep_only"
 ```

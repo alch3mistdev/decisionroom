@@ -26,6 +26,7 @@ describe("resolveLLM", () => {
     vi.resetModules();
     localHealthy.mockReset();
     hostedHealthy.mockReset();
+    delete process.env.LLM_AUTO_PRIORITY;
   });
 
   it("prefers local when auto mode and local is healthy", async () => {
@@ -48,6 +49,30 @@ describe("resolveLLM", () => {
 
     expect(resolved.provider).toBe("hosted");
     expect(resolved.model).toBe("claude-test");
+  });
+
+  it("prefers hosted when auto mode and hosted_first is configured", async () => {
+    process.env.LLM_AUTO_PRIORITY = "hosted_first";
+    localHealthy.mockResolvedValue(true);
+    hostedHealthy.mockResolvedValue(true);
+
+    const { resolveLLM } = await import("@/lib/llm/router");
+    const resolved = await resolveLLM("auto");
+
+    expect(resolved.provider).toBe("hosted");
+    expect(resolved.model).toBe("claude-test");
+  });
+
+  it("falls back to local when hosted_first is configured and hosted is unavailable", async () => {
+    process.env.LLM_AUTO_PRIORITY = "hosted_first";
+    localHealthy.mockResolvedValue(true);
+    hostedHealthy.mockResolvedValue(false);
+
+    const { resolveLLM } = await import("@/lib/llm/router");
+    const resolved = await resolveLLM("auto");
+
+    expect(resolved.provider).toBe("local");
+    expect(resolved.model).toBe("ollama-test");
   });
 
   it("returns provider unavailable when explicit provider is unhealthy", async () => {

@@ -67,7 +67,7 @@ export function AnalysisStep({
           value={providerPreference}
           onChange={(event) => setProviderPreference(event.target.value as typeof providerPreference)}
         >
-          <option value="auto">Auto (local then hosted)</option>
+          <option value="auto">Auto (env priority)</option>
           <option value="local">Local only (Ollama)</option>
           <option value="hosted">Hosted only (Anthropic)</option>
         </select>

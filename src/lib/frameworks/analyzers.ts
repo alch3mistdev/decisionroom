@@ -726,6 +726,8 @@ export async function analyzeFrameworkWithLLM(
       "Keep outputs concise, specific, and execution-oriented.",
       "Scores must be in [0,1].",
       "Use visualization payloads that match the data shape and are readable by the UI.",
+      "Keep list sizes minimal to preserve reliability: insights=3, actions=3, risks=2, assumptions=2.",
+      "Keep each sentence under 180 characters.",
     ].join("\n"),
     userPrompt: [
       `Framework: ${framework.name} (${framework.id})`,
@@ -735,11 +737,12 @@ export async function analyzeFrameworkWithLLM(
       `Framework theme weights: ${JSON.stringify(framework.themeWeights)}`,
       `Decision themes: ${JSON.stringify(decisionThemes)}`,
       `Decision brief compact: ${JSON.stringify(compactBriefForPrompt(brief))}`,
+      "Visualization data should include at most 6 points/items.",
       "Return JSON only.",
     ].join("\n"),
     schema: frameworkAnalysisLLMSchema,
     temperature: 0.15,
-    maxTokens: 1000,
+    maxTokens: 1600,
   });
 
   const blendedApplicability = clamp(generated.applicabilityScore * 0.8 + fitScore * 0.2);

@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 const parseMock = vi.fn();
-const AnthropicCtorMock = vi.fn(function AnthropicMock(this: { messages: { parse: typeof parseMock } }) {
-  this.messages = { parse: parseMock };
+const createMock = vi.fn();
+const AnthropicCtorMock = vi.fn(function AnthropicMock(this: { messages: { parse: typeof parseMock; create: typeof createMock } }) {
+  this.messages = { parse: parseMock, create: createMock };
 });
 const zodOutputFormatMock = vi.fn((schema: unknown) => ({ type: "json_schema", schema }));
 
@@ -19,9 +20,11 @@ describe("AnthropicAdapter", () => {
   beforeEach(() => {
     vi.resetModules();
     parseMock.mockReset();
+    createMock.mockReset();
     AnthropicCtorMock.mockClear();
     zodOutputFormatMock.mockClear();
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_MODEL;
   });
 
   it("returns parsed structured output", async () => {
@@ -95,5 +98,30 @@ describe("AnthropicAdapter", () => {
         schema: z.object({ value: z.number() }),
       }),
     ).rejects.toMatchObject({ code: "MODEL_TIMEOUT" });
+  });
+
+  it("falls back to text-json mode when structured outputs are not supported by model", async () => {
+    process.env.ANTHROPIC_API_KEY = "test-key";
+    process.env.ANTHROPIC_MODEL = "claude-3-5-sonnet-latest";
+    createMock.mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ value: 42 }),
+        },
+      ],
+    });
+
+    const { AnthropicAdapter } = await import("@/lib/llm/anthropic-adapter");
+    const adapter = new AnthropicAdapter();
+    const result = await adapter.generateJson({
+      systemPrompt: "Return object",
+      userPrompt: "Return object",
+      schema: z.object({ value: z.number() }),
+    });
+
+    expect(result.value).toBe(42);
+    expect(parseMock).not.toHaveBeenCalled();
+    expect(createMock).toHaveBeenCalledTimes(1);
   });
 });

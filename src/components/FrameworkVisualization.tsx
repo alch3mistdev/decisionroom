@@ -22,19 +22,67 @@ function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" && value.trim().length > 0 ? value : fallback;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function asStringArray(value: unknown): string[] {
+  return asArray(value)
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function asArrayFromKeys(value: unknown, keys: string[]): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  const record = asRecord(value);
+  for (const key of keys) {
+    if (Array.isArray(record[key])) {
+      return record[key] as unknown[];
+    }
+  }
+
+  return [];
+}
+
+function toTitleCase(value: string): string {
+  return value
+    .replaceAll(/[_-]+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function SwotGrid({ result }: Props) {
-  const data = result.vizPayload.data as {
-    strengths: string[];
-    weaknesses: string[];
-    opportunities: string[];
-    threats: string[];
-  };
+  const data = asRecord(result.vizPayload.data);
+  const strengths = asStringArray(data.strengths);
+  const weaknesses = asStringArray(data.weaknesses);
+  const opportunities = asStringArray(data.opportunities);
+  const threats = asStringArray(data.threats);
 
   const sections = [
-    { title: "Strengths", items: data.strengths, tone: "border-emerald-400/40 bg-emerald-500/10" },
-    { title: "Weaknesses", items: data.weaknesses, tone: "border-rose-400/40 bg-rose-500/10" },
-    { title: "Opportunities", items: data.opportunities, tone: "border-sky-400/40 bg-sky-500/10" },
-    { title: "Threats", items: data.threats, tone: "border-amber-400/40 bg-amber-500/10" },
+    { title: "Strengths", items: strengths, tone: "border-emerald-400/40 bg-emerald-500/10" },
+    { title: "Weaknesses", items: weaknesses, tone: "border-rose-400/40 bg-rose-500/10" },
+    { title: "Opportunities", items: opportunities, tone: "border-sky-400/40 bg-sky-500/10" },
+    { title: "Threats", items: threats, tone: "border-amber-400/40 bg-amber-500/10" },
   ];
 
   return (
@@ -54,12 +102,15 @@ function SwotGrid({ result }: Props) {
 }
 
 function ListViz({ result }: Props) {
-  const data = (result.vizPayload.data as Array<Record<string, string | number>>) ?? [];
+  const data = asArray(result.vizPayload.data).filter(isRecord);
 
   return (
     <div className="space-y-2 rounded-xl border border-slate-700/70 bg-slate-950/70 p-3 text-xs text-slate-200">
       {data.map((item, index) => (
-        <div key={`${index}-${item.behavior ?? "row"}`} className="rounded-lg border border-slate-800/80 p-2">
+        <div
+          key={`${index}-${asString(item.behavior, "row")}`}
+          className="rounded-lg border border-slate-800/80 p-2"
+        >
           {Object.entries(item).map(([key, value]) => (
             <p key={key}>
               <span className="mr-1 font-semibold capitalize text-slate-300">{key.replaceAll(/([A-Z])/g, " $1")}: </span>
@@ -75,30 +126,42 @@ function ListViz({ result }: Props) {
 function BarLikeViz({ result }: Props) {
   const isHistogram = result.vizPayload.type === "histogram";
   const isTimeline = result.vizPayload.type === "timeline";
+  const data = result.vizPayload.data;
 
   const rows: BarRow[] = isHistogram
-    ? ((result.vizPayload.data as { bins: Array<{ binStart: number; binEnd: number; count: number }> }).bins ?? []).map(
-        (bin) => ({
-          label: `${Math.round(bin.binStart * 100)}-${Math.round(bin.binEnd * 100)}%`,
-          value: bin.count,
-        }),
-      )
+    ? asArrayFromKeys(data, ["bins"]).map((binRaw) => {
+        const bin = asRecord(binRaw);
+        const start = asNumber(bin.binStart);
+        const end = asNumber(bin.binEnd);
+        const count = asNumber(bin.count);
+
+        return {
+          label: `${Math.round(start * 100)}-${Math.round(end * 100)}%`,
+          value: count,
+        };
+      })
     : isTimeline
-      ? ((result.vizPayload.data as Array<{ horizon: string; positive: number; negative: number }>) ?? []).map((row) => ({
-          label: row.horizon,
-          value: row.positive,
-          secondary: row.negative,
-        }))
-      : ((result.vizPayload.data as Array<Record<string, string | number>>) ?? []).map((row) => {
+      ? asArrayFromKeys(data, ["rows", "items", "timeline", "data", "values"]).map((rowRaw, index) => {
+          const row = asRecord(rowRaw);
+          return {
+            label: asString(row.horizon, `row-${index + 1}`),
+            value: asNumber(row.positive),
+            secondary: asNumber(row.negative),
+          };
+        })
+      : asArrayFromKeys(data, ["rows", "items", "series", "data", "values"]).map((rowRaw, index) => {
+          const row = asRecord(rowRaw);
           const label =
-            (row.label as string | undefined) ??
-            (row.segment as string | undefined) ??
-            (row.stakeholder as string | undefined) ??
-            (row.horizon as string | undefined) ??
-            "item";
-          const numericEntries = Object.entries(row).filter(([, value]) => typeof value === "number");
-          const primary = (numericEntries[0]?.[1] as number | undefined) ?? 0;
-          const secondary = (numericEntries[1]?.[1] as number | undefined) ?? undefined;
+            asString(row.label) ||
+            asString(row.segment) ||
+            asString(row.stakeholder) ||
+            asString(row.horizon) ||
+            `item-${index + 1}`;
+          const numericEntries = Object.values(row).filter(
+            (value): value is number => typeof value === "number" && Number.isFinite(value),
+          );
+          const primary = numericEntries[0] ?? 0;
+          const secondary = numericEntries[1];
 
           return {
             label,
@@ -181,17 +244,20 @@ function BarLikeViz({ result }: Props) {
 }
 
 function ScatterViz({ result }: Props) {
-  const raw = (result.vizPayload.data as Array<Record<string, string | number>>) ?? [];
+  const raw = asArrayFromKeys(result.vizPayload.data, ["points", "rows", "data", "values"]);
 
-  const points = raw.map((point) => {
-    const label = (point.label as string | undefined) ?? (point.option as string | undefined) ?? "point";
-    const numbers = Object.entries(point).filter(([, value]) => typeof value === "number");
+  const points = raw.map((pointRaw, index) => {
+    const point = asRecord(pointRaw);
+    const label = asString(point.label) || asString(point.option) || `point-${index + 1}`;
+    const numbers = Object.values(point).filter(
+      (value): value is number => typeof value === "number" && Number.isFinite(value),
+    );
 
     return {
       label,
-      x: (numbers[0]?.[1] as number | undefined) ?? 0,
-      y: (numbers[1]?.[1] as number | undefined) ?? 0,
-      size: (numbers[2]?.[1] as number | undefined) ?? 18,
+      x: numbers[0] ?? 0,
+      y: numbers[1] ?? 0,
+      size: numbers[2] ?? 18,
     };
   });
 
@@ -268,12 +334,15 @@ function ScatterViz({ result }: Props) {
 }
 
 function LineViz({ result }: Props) {
-  const payload = result.vizPayload.data as {
-    phases?: Array<{ phase: string; x: number; y: number }>;
-    currentPosition?: number;
-  };
-
-  const points = payload.phases ?? [];
+  const payload = asRecord(result.vizPayload.data);
+  const points = asArrayFromKeys(payload.phases, ["points"]).map((pointRaw, index) => {
+    const point = asRecord(pointRaw);
+    return {
+      phase: asString(point.phase, `P${index + 1}`),
+      x: asNumber(point.x),
+      y: asNumber(point.y),
+    };
+  });
   const innerWidth = WIDTH - PADDING.left - PADDING.right;
   const innerHeight = HEIGHT - PADDING.top - PADDING.bottom;
 
@@ -286,7 +355,7 @@ function LineViz({ result }: Props) {
     .y((point: { x: number; y: number }) => y(point.y))
     .curve(d3.curveCatmullRom.alpha(0.5));
 
-  const currentX = payload.currentPosition ?? 0.5;
+  const currentX = asNumber(payload.currentPosition, 0.5);
 
   return (
     <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="h-[260px] w-full rounded-xl bg-slate-950/80">
@@ -314,8 +383,60 @@ function LineViz({ result }: Props) {
 }
 
 function QuadrantViz({ result }: Props) {
-  const quadrants =
-    (result.vizPayload.data as Array<{ id: string; label: string; count: number; items: string[] }>) ?? [];
+  const data = result.vizPayload.data;
+  const labelByKey: Record<string, string> = {
+    do: "Do First",
+    schedule: "Schedule",
+    delegate: "Delegate",
+    eliminate: "Eliminate",
+    q1: "Q1",
+    q2: "Q2",
+    q3: "Q3",
+    q4: "Q4",
+  };
+
+  let quadrantRaw = asArrayFromKeys(data, ["quadrants", "data", "items"]);
+
+  if (quadrantRaw.length === 0 && isRecord(data)) {
+    quadrantRaw = Object.entries(data).map(([id, value]) => {
+      if (Array.isArray(value)) {
+        return { id, label: labelByKey[id] ?? toTitleCase(id), items: value, count: value.length };
+      }
+
+      if (isRecord(value)) {
+        return {
+          id: asString(value.id, id),
+          label: asString(value.label, labelByKey[id] ?? toTitleCase(id)),
+          items: value.items,
+          count: value.count,
+        };
+      }
+
+      return {
+        id,
+        label: labelByKey[id] ?? toTitleCase(id),
+        items: [],
+        count: 0,
+      };
+    });
+  }
+
+  const quadrants = quadrantRaw
+    .map((quadrantRawValue, index) => {
+      const quadrant = asRecord(quadrantRawValue);
+      const id = asString(quadrant.id, `quadrant-${index + 1}`);
+      const label =
+        asString(quadrant.label) || labelByKey[id] || toTitleCase(id) || `Quadrant ${index + 1}`;
+      const items = asStringArray(quadrant.items);
+      const count = Math.max(0, Math.round(asNumber(quadrant.count, items.length)));
+      return {
+        id,
+        label,
+        count,
+        items,
+      };
+    })
+    .filter((quadrant) => quadrant.count > 0 || quadrant.items.length > 0);
 
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -335,7 +456,15 @@ function QuadrantViz({ result }: Props) {
 }
 
 function RadarViz({ result }: Props) {
-  const rows = (result.vizPayload.data as Array<{ axis: string; value: number }>) ?? [];
+  const rows = asArrayFromKeys(result.vizPayload.data, ["axes", "rows", "data", "values"]).map(
+    (rowRaw, index) => {
+      const row = asRecord(rowRaw);
+      return {
+        axis: asString(row.axis, `Axis ${index + 1}`),
+        value: asNumber(row.value),
+      };
+    },
+  );
   const cx = 180;
   const cy = 150;
   const radius = 110;

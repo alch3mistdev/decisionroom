@@ -1,4 +1,5 @@
 import type { LLMAdapter } from "@/lib/llm/base";
+import { env } from "@/lib/env";
 import { ProviderUnavailableError } from "@/lib/errors";
 import { AnthropicAdapter } from "@/lib/llm/anthropic-adapter";
 import { OllamaAdapter } from "@/lib/llm/ollama-adapter";
@@ -78,20 +79,23 @@ export async function resolveLLM(preference: ProviderPreference): Promise<Resolv
     return hosted;
   }
 
-  const local = await resolveLocal();
-  if (local) {
-    return local;
-  }
+  const resolverOrder =
+    env.LLM_AUTO_PRIORITY === "hosted_first"
+      ? [resolveHosted, resolveLocal]
+      : [resolveLocal, resolveHosted];
 
-  const hosted = await resolveHosted();
-  if (hosted) {
-    return hosted;
+  for (const resolveProvider of resolverOrder) {
+    const resolved = await resolveProvider();
+    if (resolved) {
+      return resolved;
+    }
   }
 
   throw new ProviderUnavailableError(
     "No healthy LLM provider available. Configure ANTHROPIC_API_KEY or run Ollama locally.",
     {
       preference,
+      autoPriority: env.LLM_AUTO_PRIORITY,
       localModel: process.env.OLLAMA_MODEL,
       hostedModel: process.env.ANTHROPIC_MODEL,
     },

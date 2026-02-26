@@ -5,6 +5,7 @@ import { inferDecisionThemeVector } from "@/lib/analysis/theme";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
 import {
+  AppError,
   ModelOutputInvalidError,
   ModelTimeoutError,
   ProviderUnavailableError,
@@ -116,6 +117,21 @@ function canFallbackToSimulation(error: unknown): boolean {
   );
 }
 
+function extractErrorReason(error: unknown): string {
+  if (error instanceof AppError && typeof error.details === "object" && error.details !== null) {
+    const details = error.details as { reason?: unknown };
+    if (typeof details.reason === "string" && details.reason.trim().length > 0) {
+      return details.reason;
+    }
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Unknown LLM failure";
+}
+
 function alternateProviderPreference(provider: string): ProviderPreference | null {
   if (provider === "local") {
     return "hosted";
@@ -147,7 +163,7 @@ async function analyzeFrameworkForRun(
     }
 
     const framework = getFrameworkDefinition(frameworkId);
-    const primaryReason = error instanceof Error ? error.message : "Unknown LLM failure";
+    const primaryReason = extractErrorReason(error);
     const alternatePreference = alternateProviderPreference(llm.provider);
     let alternateReason: string | null = null;
 
@@ -176,8 +192,7 @@ async function analyzeFrameworkForRun(
           };
         }
       } catch (failoverError) {
-        alternateReason =
-          failoverError instanceof Error ? failoverError.message : "Unknown failover error";
+        alternateReason = extractErrorReason(failoverError);
       }
     }
 
