@@ -53,7 +53,7 @@ export const FRAMEWORK_IDS = [
 
 export type FrameworkId = (typeof FRAMEWORK_IDS)[number];
 
-export const TOP_12_DEEP_FRAMEWORKS = new Set<FrameworkId>([
+export const TOP_12_DEEP_FRAMEWORK_IDS = [
   "eisenhower_matrix",
   "swot_analysis",
   "bcg_matrix",
@@ -66,7 +66,11 @@ export const TOP_12_DEEP_FRAMEWORKS = new Set<FrameworkId>([
   "crossroads_model",
   "conflict_resolution_model",
   "double_loop_learning",
-]);
+] as const;
+
+export type Top12DeepFrameworkId = (typeof TOP_12_DEEP_FRAMEWORK_IDS)[number];
+
+export const TOP_12_DEEP_FRAMEWORKS = new Set<FrameworkId>(TOP_12_DEEP_FRAMEWORK_IDS);
 
 export type ProviderPreference = "local" | "hosted" | "auto";
 export type ResolvedProvider = "local" | "hosted";
@@ -131,24 +135,205 @@ export interface ThemeVector {
   stakeholderImpact: number;
 }
 
+export type VisualizationType =
+  | "quadrant"
+  | "swot"
+  | "scatter"
+  | "line"
+  | "bar"
+  | "histogram"
+  | "timeline"
+  | "tree"
+  | "network"
+  | "radar"
+  | "list";
+
+export interface EisenhowerVizData {
+  kind: "eisenhower_matrix";
+  quadrants: Array<{
+    id: "do" | "schedule" | "delegate" | "eliminate";
+    label: string;
+    count: number;
+    items: string[];
+  }>;
+  points: Array<{
+    label: string;
+    urgency: number;
+    importance: number;
+    quadrant: "do" | "schedule" | "delegate" | "eliminate";
+  }>;
+}
+
+export interface SwotVizData {
+  kind: "swot_analysis";
+  strengths: string[];
+  weaknesses: string[];
+  opportunities: string[];
+  threats: string[];
+}
+
+export interface BcgVizData {
+  kind: "bcg_matrix";
+  quadrants: {
+    topLeft: string;
+    topRight: string;
+    bottomLeft: string;
+    bottomRight: string;
+  };
+  points: Array<{
+    id: string;
+    label: string;
+    share: number;
+    growth: number;
+    size: number;
+    quadrant: "question_marks" | "stars" | "dogs" | "cash_cows";
+  }>;
+}
+
+export interface ProjectPortfolioVizData {
+  kind: "project_portfolio_matrix";
+  quadrants: {
+    topLeft: string;
+    topRight: string;
+    bottomLeft: string;
+    bottomRight: string;
+  };
+  points: Array<{
+    id: string;
+    label: string;
+    risk: number;
+    value: number;
+    probability: number;
+    size: number;
+    quadrant: string;
+  }>;
+}
+
+export interface ParetoVizData {
+  kind: "pareto_principle";
+  factors: Array<{
+    label: string;
+    contribution: number;
+    cumulative: number;
+    detail?: string;
+  }>;
+  threshold: number;
+}
+
+export interface HypeCycleVizData {
+  kind: "hype_cycle";
+  phases: Array<{
+    phase: string;
+    x: number;
+    y: number;
+  }>;
+  current: {
+    label: string;
+    x: number;
+    y: number;
+    phase: string;
+  };
+}
+
+export interface ChasmVizData {
+  kind: "chasm_diffusion_model";
+  segments: Array<{
+    segment: string;
+    adoption: number;
+  }>;
+  chasmAfter: string;
+  gap: number;
+}
+
+export interface MonteCarloVizData {
+  kind: "monte_carlo_simulation";
+  bins: Array<{
+    binStart: number;
+    binEnd: number;
+    count: number;
+  }>;
+  total: number;
+  p10: number;
+  p50: number;
+  p90: number;
+}
+
+export interface ConsequencesVizData {
+  kind: "consequences_model";
+  horizons: Array<{
+    horizon: string;
+    direct: number;
+    indirect: number;
+    net: number;
+  }>;
+  links: Array<{
+    from: string;
+    to: string;
+    weight: number;
+  }>;
+}
+
+export interface CrossroadsVizData {
+  kind: "crossroads_model";
+  options: Array<{
+    option: string;
+    feasibility: number;
+    desirability: number;
+    reversibility: number;
+    size: number;
+    note: string;
+  }>;
+}
+
+export interface ConflictResolutionVizData {
+  kind: "conflict_resolution_model";
+  modes: Array<{
+    mode: string;
+    assertiveness: number;
+    cooperativeness: number;
+    suitability: number;
+  }>;
+  recommendedMode: string;
+}
+
+export interface DoubleLoopVizData {
+  kind: "double_loop_learning";
+  loops: Array<{
+    behavior: string;
+    outcome: string;
+    singleLoopFix: string;
+    rootAssumption: string;
+    leverage: number;
+  }>;
+}
+
+export type Top12VisualizationData =
+  | EisenhowerVizData
+  | SwotVizData
+  | BcgVizData
+  | ProjectPortfolioVizData
+  | ParetoVizData
+  | HypeCycleVizData
+  | ChasmVizData
+  | MonteCarloVizData
+  | ConsequencesVizData
+  | CrossroadsVizData
+  | ConflictResolutionVizData
+  | DoubleLoopVizData;
+
 export interface VisualizationSpec {
-  type:
-    | "quadrant"
-    | "swot"
-    | "scatter"
-    | "line"
-    | "bar"
-    | "histogram"
-    | "timeline"
-    | "tree"
-    | "network"
-    | "radar"
-    | "list";
+  type: VisualizationType;
   title: string;
   subtitle?: string;
   xLabel?: string;
   yLabel?: string;
+  vizSchemaVersion?: number;
   data: unknown;
+}
+
+export interface CanonicalTop12VisualizationSpec extends VisualizationSpec {
+  vizSchemaVersion: 2;
+  data: Top12VisualizationData;
 }
 
 export interface FrameworkGenerationMetadata {

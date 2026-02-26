@@ -12,6 +12,7 @@ const transactionMock = vi.fn();
 
 const analyzeFrameworkWithLLMMock = vi.fn();
 const analyzeFrameworkSimulationMock = vi.fn();
+const enforceFrameworkVisualizationIntegrityMock = vi.fn();
 const resolveLLMMock = vi.fn();
 const getAdapterForResolvedProviderMock = vi.fn();
 
@@ -43,6 +44,8 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/frameworks/analyzers", () => ({
   analyzeFrameworkWithLLM: (...args: unknown[]) => analyzeFrameworkWithLLMMock(...args),
   analyzeFrameworkSimulation: (...args: unknown[]) => analyzeFrameworkSimulationMock(...args),
+  enforceFrameworkVisualizationIntegrity: (...args: unknown[]) =>
+    enforceFrameworkVisualizationIntegrityMock(...args),
 }));
 
 vi.mock("@/lib/frameworks/registry", () => ({
@@ -176,6 +179,9 @@ describe("analysis runner", () => {
     });
     analyzeFrameworkWithLLMMock.mockReset();
     analyzeFrameworkSimulationMock.mockReset();
+    enforceFrameworkVisualizationIntegrityMock.mockReset().mockImplementation((result: FrameworkResult) => ({
+      result,
+    }));
     resolveLLMMock.mockReset();
     getAdapterForResolvedProviderMock.mockReset().mockReturnValue({
       provider: "local",

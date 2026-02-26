@@ -1,4 +1,6 @@
 import { getFrameworkDefinition } from "@/lib/frameworks/registry";
+import { buildCanonicalVisualizationIfTop12 } from "@/lib/frameworks/visual-builders";
+import { isTop12FrameworkId, validateFrameworkViz } from "@/lib/frameworks/visual-contracts";
 import { blendThemeVectors, normalizeThemeVector } from "@/lib/analysis/theme";
 import type { LLMAdapter } from "@/lib/llm/base";
 import { frameworkAnalysisLLMSchema } from "@/lib/schemas";
@@ -699,7 +701,8 @@ export function analyzeFrameworkSimulation(
     risks: parts.risks,
     assumptions: parts.assumptions,
     themes,
-    vizPayload: parts.vizPayload,
+    vizPayload:
+      buildCanonicalVisualizationIfTop12(frameworkId, brief, decisionThemes) ?? parts.vizPayload,
     deepSupported: TOP_12_DEEP_FRAMEWORKS.has(frameworkId),
     generation: {
       mode: "fallback",
@@ -726,6 +729,7 @@ export async function analyzeFrameworkWithLLM(
       "Keep outputs concise, specific, and execution-oriented.",
       "Scores must be in [0,1].",
       "Use visualization payloads that match the data shape and are readable by the UI.",
+      "For top-12 deep frameworks, visuals are canonicalized in code; focus your strongest quality on insights/actions/risks.",
       "Keep list sizes minimal to preserve reliability: insights=3, actions=3, risks=2, assumptions=2.",
       "Keep each sentence under 180 characters.",
     ].join("\n"),
@@ -758,13 +762,52 @@ export async function analyzeFrameworkWithLLM(
     risks: generated.risks,
     assumptions: generated.assumptions,
     themes: normalizeThemeVector(generated.themes),
-    vizPayload: generated.vizPayload,
+    vizPayload:
+      buildCanonicalVisualizationIfTop12(frameworkId, brief, decisionThemes) ?? generated.vizPayload,
     deepSupported: TOP_12_DEEP_FRAMEWORKS.has(frameworkId),
     generation: {
       mode: "llm",
       provider: llm.provider,
       model: llm.model,
     },
+  };
+}
+
+export function enforceFrameworkVisualizationIntegrity(
+  result: FrameworkResult,
+  brief: DecisionBrief,
+  decisionThemes: ThemeVector,
+): { result: FrameworkResult; warning?: string } {
+  if (!isTop12FrameworkId(result.frameworkId)) {
+    return { result };
+  }
+
+  const validation = validateFrameworkViz(result.frameworkId, result.vizPayload);
+  if (validation.ok) {
+    return { result };
+  }
+
+  const canonicalPayload = buildCanonicalVisualizationIfTop12(result.frameworkId, brief, decisionThemes);
+  if (!canonicalPayload) {
+    return { result };
+  }
+
+  const warning = `${result.frameworkName} (${result.frameworkId}) visualization payload was regenerated to canonical schema: ${validation.issues.join(" ")}`;
+
+  return {
+    result: {
+      ...result,
+      vizPayload: canonicalPayload,
+      generation: {
+        mode: result.generation?.mode ?? "fallback",
+        provider: result.generation?.provider,
+        model: result.generation?.model,
+        warning: result.generation?.warning
+          ? `${result.generation.warning} ${warning}`
+          : warning,
+      },
+    },
+    warning,
   };
 }
 

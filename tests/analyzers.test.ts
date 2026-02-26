@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { buildPropagatedDecisionMap, buildSynthesisSummary } from "@/lib/analysis/propagation";
-import { analyzeFramework } from "@/lib/frameworks/analyzers";
+import { analyzeFramework, enforceFrameworkVisualizationIntegrity } from "@/lib/frameworks/analyzers";
 import { inferDecisionThemeVector } from "@/lib/analysis/theme";
-import type { DecisionBrief } from "@/lib/types";
+import { TOP12_VIZ_TYPE_BY_FRAMEWORK } from "@/lib/frameworks/visual-contracts";
+import { TOP_12_DEEP_FRAMEWORK_IDS, type DecisionBrief, type FrameworkResult } from "@/lib/types";
 
 const brief: DecisionBrief = {
   title: "Launch AI assistant into enterprise support",
@@ -43,6 +44,35 @@ describe("analysis pipeline primitives", () => {
     expect(genericResult.deepSupported).toBe(false);
     expect(genericResult.insights.length).toBeGreaterThan(0);
     expect(genericResult.vizPayload.type).toBe("radar");
+  });
+
+  it("enforces canonical visual types for top-12 frameworks", () => {
+    const themes = inferDecisionThemeVector(brief);
+
+    for (const frameworkId of TOP_12_DEEP_FRAMEWORK_IDS) {
+      const result = analyzeFramework(frameworkId, brief, themes);
+      expect(result.vizPayload.type).toBe(TOP12_VIZ_TYPE_BY_FRAMEWORK[frameworkId]);
+      expect(result.vizPayload.vizSchemaVersion).toBe(2);
+    }
+  });
+
+  it("repairs malformed top-12 visual payloads", () => {
+    const themes = inferDecisionThemeVector(brief);
+    const malformed: FrameworkResult = {
+      ...analyzeFramework("swot_analysis", brief, themes),
+      vizPayload: {
+        type: "quadrant",
+        title: "Bad",
+        data: {
+          points: [],
+        },
+      },
+    };
+
+    const repaired = enforceFrameworkVisualizationIntegrity(malformed, brief, themes);
+    expect(repaired.warning).toBeTruthy();
+    expect(repaired.result.vizPayload.type).toBe("swot");
+    expect(repaired.result.vizPayload.vizSchemaVersion).toBe(2);
   });
 
   it("builds propagated map and synthesis from framework results", () => {

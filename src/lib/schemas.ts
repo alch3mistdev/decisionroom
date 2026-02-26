@@ -92,6 +92,7 @@ export const visualizationSpecSchema = z.object({
   subtitle: z.string().optional(),
   xLabel: z.string().optional(),
   yLabel: z.string().optional(),
+  vizSchemaVersion: z.number().int().min(1).optional(),
   data: z.unknown(),
 });
 

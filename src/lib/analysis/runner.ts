@@ -13,6 +13,7 @@ import {
 import {
   analyzeFrameworkSimulation,
   analyzeFrameworkWithLLM,
+  enforceFrameworkVisualizationIntegrity,
   type LLMFrameworkAnalysisContext,
 } from "@/lib/frameworks/analyzers";
 import { getFrameworkDefinition, listFrameworkDefinitions } from "@/lib/frameworks/registry";
@@ -279,10 +280,18 @@ async function processRun(runId: string): Promise<void> {
           provider: resolvedLLM.provider,
           model: resolvedLLM.model,
         });
+        const normalized = enforceFrameworkVisualizationIntegrity(
+          analyzed.result,
+          brief,
+          decisionThemes,
+        );
 
-        frameworkResults[index] = analyzed.result;
+        frameworkResults[index] = normalized.result;
         if (analyzed.warning) {
           warnings.push(analyzed.warning);
+        }
+        if (normalized.warning) {
+          warnings.push(normalized.warning);
         }
 
         await prisma.frameworkResultRecord.upsert({
@@ -293,16 +302,16 @@ async function processRun(runId: string): Promise<void> {
             },
           },
           update: {
-            resultJson: analyzed.result as unknown as Prisma.InputJsonValue,
-            applicabilityScore: analyzed.result.applicabilityScore,
-            confidence: analyzed.result.confidence,
+            resultJson: normalized.result as unknown as Prisma.InputJsonValue,
+            applicabilityScore: normalized.result.applicabilityScore,
+            confidence: normalized.result.confidence,
           },
           create: {
             runId,
             frameworkId,
-            resultJson: analyzed.result as unknown as Prisma.InputJsonValue,
-            applicabilityScore: analyzed.result.applicabilityScore,
-            confidence: analyzed.result.confidence,
+            resultJson: normalized.result as unknown as Prisma.InputJsonValue,
+            applicabilityScore: normalized.result.applicabilityScore,
+            confidence: normalized.result.confidence,
           },
         });
       }
