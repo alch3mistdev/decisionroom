@@ -9,6 +9,7 @@ import type {
   FrameworkResult,
   PropagatedDecisionMap,
   ProviderPreference,
+  RankedFrameworkFit,
   SynthesisSummary,
 } from "@/lib/types";
 
@@ -51,11 +52,7 @@ export interface AnalysisStepProps {
   briefQualityScore: number | null;
   providerPreference: ProviderPreference;
   setProviderPreference: (value: ProviderPreference) => void;
-  frameworkOptions: Array<{
-    id: FrameworkId;
-    name: string;
-    deepSupported: boolean;
-  }>;
+  rankedFrameworkFits: RankedFrameworkFit[];
   selectedFrameworkIds: Set<FrameworkId>;
   setSelectedFrameworkIds: React.Dispatch<React.SetStateAction<Set<FrameworkId>>>;
   selectedFrameworkArray: FrameworkId[];

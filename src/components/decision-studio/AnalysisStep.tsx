@@ -1,5 +1,3 @@
-import { TOP_12_DEEP_FRAMEWORKS } from "@/lib/types";
-
 import type { AnalysisStepProps } from "@/components/decision-studio/types";
 
 const MIN_BRIEF_QUALITY = 0.67;
@@ -9,7 +7,7 @@ export function AnalysisStep({
   briefQualityScore,
   providerPreference,
   setProviderPreference,
-  frameworkOptions,
+  rankedFrameworkFits,
   selectedFrameworkIds,
   setSelectedFrameworkIds,
   selectedFrameworkArray,
@@ -43,14 +41,21 @@ export function AnalysisStep({
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={() => setSelectedFrameworkIds(new Set(Array.from(TOP_12_DEEP_FRAMEWORKS)))}
+          onClick={() => setSelectedFrameworkIds(new Set(rankedFrameworkFits.slice(0, 4).map((fit) => fit.id)))}
           className="rounded-full border border-slate-600 px-3 py-1 text-xs text-slate-200"
         >
-          Top 12 Deep
+          Top 4 Fit (default)
         </button>
         <button
           type="button"
-          onClick={() => setSelectedFrameworkIds(new Set(frameworkOptions.map((framework) => framework.id)))}
+          onClick={() => setSelectedFrameworkIds(new Set(rankedFrameworkFits.slice(0, 12).map((fit) => fit.id)))}
+          className="rounded-full border border-slate-600 px-3 py-1 text-xs text-slate-200"
+        >
+          Top 12 Fit
+        </button>
+        <button
+          type="button"
+          onClick={() => setSelectedFrameworkIds(new Set(rankedFrameworkFits.map((fit) => fit.id)))}
           className="rounded-full border border-slate-600 px-3 py-1 text-xs text-slate-200"
         >
           All 50
@@ -59,6 +64,9 @@ export function AnalysisStep({
           {selectedFrameworkArray.length} selected
         </span>
       </div>
+      <p className="text-xs text-slate-400">
+        Ranked by fit to your brief. Default is top 4; you can manually choose any frameworks.
+      </p>
 
       <label className="block text-xs font-medium uppercase tracking-wide text-slate-300">
         Provider preference
@@ -83,21 +91,24 @@ export function AnalysisStep({
 
       {showFrameworkSelector ? (
         <div className="max-h-[260px] space-y-1 overflow-auto rounded-xl border border-slate-700 bg-slate-950/60 p-2">
-          {frameworkOptions.map((framework) => {
-            const selected = selectedFrameworkIds.has(framework.id);
+          {rankedFrameworkFits.map((fit) => {
+            const selected = selectedFrameworkIds.has(fit.id);
 
             return (
               <label
-                key={framework.id}
+                key={fit.id}
                 className="flex cursor-pointer items-center justify-between rounded-lg px-2 py-1 text-xs text-slate-200 hover:bg-slate-800/70"
               >
-                <span>
-                  {framework.name}
-                  {framework.deepSupported ? (
+                <span className="min-w-0">
+                  <span className="truncate">{fit.name}</span>
+                  {fit.deepSupported ? (
                     <span className="ml-2 rounded-full border border-emerald-400/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-200">
                       deep
                     </span>
                   ) : null}
+                  <span className="ml-2 text-[10px] text-slate-400">
+                    #{fit.rank} · fit {Math.round(fit.fitScore * 100)}%
+                  </span>
                 </span>
                 <input
                   type="checkbox"
@@ -106,9 +117,9 @@ export function AnalysisStep({
                     setSelectedFrameworkIds((prev) => {
                       const next = new Set(prev);
                       if (selected) {
-                        next.delete(framework.id);
+                        next.delete(fit.id);
                       } else {
-                        next.add(framework.id);
+                        next.add(fit.id);
                       }
                       return next;
                     });

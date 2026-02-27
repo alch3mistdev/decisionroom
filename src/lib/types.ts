@@ -471,3 +471,11 @@ export interface FrameworkDefinition {
   promptTemplate: string;
   themeWeights: ThemeVector;
 }
+
+export interface RankedFrameworkFit {
+  rank: number;
+  id: FrameworkId;
+  name: string;
+  deepSupported: boolean;
+  fitScore: number;
+}

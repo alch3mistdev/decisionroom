@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -12,6 +12,7 @@ import type {
   DecisionDetailPayload,
   ResultsPayload,
 } from "@/components/decision-studio/types";
+import { rankFrameworkFitsForBrief } from "@/lib/frameworks/fit-ranking";
 import { listFrameworkDefinitions } from "@/lib/frameworks/registry";
 import { ApiError, fetchJson } from "@/lib/client/api";
 import type {
@@ -23,7 +24,6 @@ import type {
   FrameworkId,
   ProviderPreference,
 } from "@/lib/types";
-import { TOP_12_DEEP_FRAMEWORKS } from "@/lib/types";
 
 interface Props {
   initialDecisionId?: string;
@@ -183,7 +183,7 @@ export function DecisionStudio({ initialDecisionId }: Props) {
   const [results, setResults] = useState<ResultsPayload | null>(null);
   const [providerPreference, setProviderPreference] = useState<ProviderPreference>("auto");
   const [selectedFrameworkIds, setSelectedFrameworkIds] = useState<Set<FrameworkId>>(
-    () => new Set<FrameworkId>(Array.from(TOP_12_DEEP_FRAMEWORKS)),
+    () => new Set<FrameworkId>(),
   );
   const [activeFrameworkId, setActiveFrameworkId] = useState<FrameworkId | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -193,11 +193,25 @@ export function DecisionStudio({ initialDecisionId }: Props) {
   const [showFrameworkPanels, setShowFrameworkPanels] = useState(false);
   const [showRelationshipMap, setShowRelationshipMap] = useState(false);
   const [briefElapsedSeconds, setBriefElapsedSeconds] = useState(0);
+  const lastAutoSelectionBriefSignature = useRef<string | null>(null);
 
   const selectedFrameworkArray = useMemo(
     () => Array.from(selectedFrameworkIds.values()),
     [selectedFrameworkIds],
   );
+
+  const rankedFrameworkFits = useMemo(
+    () => (brief ? rankFrameworkFitsForBrief(brief, frameworkOptions) : []),
+    [brief],
+  );
+
+  const briefSelectionSignature = useMemo(() => {
+    if (!brief) {
+      return null;
+    }
+
+    return JSON.stringify(brief);
+  }, [brief]);
 
   const stage = deriveStage(decisionId, brief, results, runStatus);
 
@@ -239,6 +253,21 @@ export function DecisionStudio({ initialDecisionId }: Props) {
 
     return sorted;
   }, [activeFrameworkId, results, showFrameworkPanels]);
+
+  useEffect(() => {
+    if (!briefSelectionSignature || rankedFrameworkFits.length === 0) {
+      return;
+    }
+
+    if (lastAutoSelectionBriefSignature.current === briefSelectionSignature) {
+      return;
+    }
+
+    setSelectedFrameworkIds(
+      new Set<FrameworkId>(rankedFrameworkFits.slice(0, 4).map((framework) => framework.id)),
+    );
+    lastAutoSelectionBriefSignature.current = briefSelectionSignature;
+  }, [briefSelectionSignature, rankedFrameworkFits]);
 
   const loadResults = useCallback(async (targetDecisionId: string) => {
     const payload = await fetchJson<ResultsPayload>(`/api/decisions/${targetDecisionId}/results`);
@@ -867,11 +896,7 @@ export function DecisionStudio({ initialDecisionId }: Props) {
               briefQualityScore={briefQualityScore}
               providerPreference={providerPreference}
               setProviderPreference={setProviderPreference}
-              frameworkOptions={frameworkOptions.map((framework) => ({
-                id: framework.id,
-                name: framework.name,
-                deepSupported: framework.deepSupported,
-              }))}
+              rankedFrameworkFits={rankedFrameworkFits}
               selectedFrameworkIds={selectedFrameworkIds}
               setSelectedFrameworkIds={setSelectedFrameworkIds}
               selectedFrameworkArray={selectedFrameworkArray}

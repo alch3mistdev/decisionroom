@@ -6,6 +6,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DecisionStudio } from "@/components/DecisionStudio";
+import { rankFrameworkFitsForBrief } from "@/lib/frameworks/fit-ranking";
+import { listFrameworkDefinitions } from "@/lib/frameworks/registry";
+import type { DecisionBrief } from "@/lib/types";
 
 const replaceMock = vi.fn();
 
@@ -23,6 +26,44 @@ function jsonResponse(payload: unknown, status = 200): Response {
     },
   });
 }
+
+const briefA: DecisionBrief = {
+  title: "Initial brief",
+  decisionStatement:
+    "Should we launch the AI support assistant immediately or phase release to reduce risk?",
+  context:
+    "Decision balances near-term urgency with compliance and reliability guardrails under tight deadlines.",
+  alternatives: ["Launch now", "Phased rollout", "Delay launch"],
+  constraints: ["No compliance risk", "No support headcount increase"],
+  deadline: "End of quarter",
+  stakeholders: ["Support", "Security", "Product"],
+  successCriteria: ["Improve first-contact resolution", "Reduce average handle time"],
+  riskTolerance: "medium",
+  budget: "$180k",
+  timeLimit: "12 weeks",
+  assumptions: ["Pilot telemetry is representative", "Operations can absorb rollout tasks"],
+  openQuestions: ["What escalation guardrails are required?"],
+  executionSteps: ["Finalize scope", "Pilot with design partners", "Gate full rollout"],
+};
+
+const briefB: DecisionBrief = {
+  title: "Updated brief",
+  decisionStatement:
+    "Should we prioritize crossing the early-majority gap before broad rollout in enterprise segments?",
+  context:
+    "Primary uncertainty is market adoption sequencing and stakeholder alignment for proof-point delivery.",
+  alternatives: ["Bridge early majority first", "Continue design-partner pilot", "Broaden rollout"],
+  constraints: ["Maintain enterprise trust", "Keep onboarding complexity low"],
+  deadline: "Next two quarters",
+  stakeholders: ["Sales", "Customer Success", "Product Marketing", "Product"],
+  successCriteria: ["Increase adoption conversion", "Reduce pilot-to-scale cycle time"],
+  riskTolerance: "high",
+  budget: "$350k",
+  timeLimit: "24 weeks",
+  assumptions: ["Reference stories unlock adjacent accounts", "Onboarding friction can be reduced quickly"],
+  openQuestions: ["Which segment signals readiness first?", "How do we de-risk migration concerns?"],
+  executionSteps: ["Map segment proof points", "Run early-majority bridge experiments", "Scale by segment"],
+};
 
 describe("DecisionStudio flow", () => {
   beforeEach(() => {
@@ -344,5 +385,205 @@ describe("DecisionStudio flow", () => {
     await waitFor(() => {
       expect(screen.getByText("3. Decision Brief")).toBeInTheDocument();
     }, { timeout: 5000 });
+  });
+
+  it("defaults analysis selection to top 4 ranked framework fits and submits those ids", async () => {
+    const expectedTop4 = rankFrameworkFitsForBrief(briefA, listFrameworkDefinitions())
+      .slice(0, 4)
+      .map((framework) => framework.id);
+    const analyzeBodies: Array<{ frameworkIds: string[]; providerPreference: string }> = [];
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/decisions/decision-4")) {
+        return jsonResponse({
+          decision: {
+            id: "decision-4",
+            title: "Decision",
+            createdAt: "2026-02-01T00:00:00.000Z",
+            updatedAt: "2026-02-02T00:00:00.000Z",
+            input: {
+              prompt: "Should we launch now?",
+            },
+          },
+          brief: briefA,
+          briefQualityScore: 0.8,
+          clarifications: null,
+          latestRun: null,
+        });
+      }
+
+      if (url.endsWith("/api/decisions/decision-4/analyze") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { frameworkIds: string[]; providerPreference: string };
+        analyzeBodies.push(body);
+        return jsonResponse({
+          runId: "run-4",
+          status: "queued",
+          provider: "hosted",
+          model: "claude-test",
+        });
+      }
+
+      if (url.endsWith("/api/runs/run-4")) {
+        return jsonResponse({
+          runId: "run-4",
+          decisionId: "decision-4",
+          provider: "hosted",
+          model: "claude-test",
+          status: "queued",
+          error: null,
+          startedAt: null,
+          endedAt: null,
+          frameworkCount: 4,
+          completedFrameworkCount: 0,
+        });
+      }
+
+      return jsonResponse({ error: `Unexpected URL ${url}` }, 500);
+    });
+
+    render(<DecisionStudio initialDecisionId="decision-4" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("4 selected")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getAllByRole("button", { name: "Run Analysis" })[0]);
+
+    await waitFor(() => {
+      expect(analyzeBodies).toHaveLength(1);
+    });
+
+    expect(analyzeBodies[0].frameworkIds).toEqual(expectedTop4);
+    expect(analyzeBodies[0].frameworkIds).toHaveLength(4);
+  });
+
+  it("reapplies ranked top-4 defaults when a new brief is built after manual framework changes", async () => {
+    const expectedTop4AfterRefresh = rankFrameworkFitsForBrief(briefB, listFrameworkDefinitions())
+      .slice(0, 4)
+      .map((framework) => framework.id);
+    const analyzeBodies: Array<{ frameworkIds: string[]; providerPreference: string }> = [];
+    let runIndex = 0;
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/decisions/decision-5")) {
+        return jsonResponse({
+          decision: {
+            id: "decision-5",
+            title: "Decision",
+            createdAt: "2026-02-01T00:00:00.000Z",
+            updatedAt: "2026-02-02T00:00:00.000Z",
+            input: {
+              prompt: "Should we launch now?",
+            },
+          },
+          brief: briefA,
+          briefQualityScore: 0.8,
+          clarifications: {
+            generationId: "gen-5",
+            questions: [
+              {
+                id: "q_1",
+                question: "Question 1",
+                rationale: "R1",
+                answer: "Answer one",
+                status: "answered",
+                sequence: 1,
+              },
+              {
+                id: "q_2",
+                question: "Question 2",
+                rationale: "R2",
+                answer: "Answer two",
+                status: "answered",
+                sequence: 2,
+              },
+              {
+                id: "q_3",
+                question: "Question 3",
+                rationale: "R3",
+                answer: "Answer three",
+                status: "answered",
+                sequence: 3,
+              },
+            ],
+          },
+          latestRun: null,
+        });
+      }
+
+      if (url.endsWith("/api/decisions/decision-5/refine") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { mode: string };
+        if (body.mode === "submit_answers") {
+          return jsonResponse({
+            decisionBrief: briefB,
+            qualityScore: 0.82,
+            provider: "hosted",
+            model: "claude-test",
+            fallback: false,
+            status: "brief_ready",
+          });
+        }
+      }
+
+      if (url.endsWith("/api/decisions/decision-5/analyze") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { frameworkIds: string[]; providerPreference: string };
+        analyzeBodies.push(body);
+        runIndex += 1;
+        return jsonResponse({
+          runId: `run-5-${runIndex}`,
+          status: "queued",
+          provider: "hosted",
+          model: "claude-test",
+        });
+      }
+
+      if (url.includes("/api/runs/run-5-")) {
+        return jsonResponse({
+          runId: "run-5",
+          decisionId: "decision-5",
+          provider: "hosted",
+          model: "claude-test",
+          status: "queued",
+          error: null,
+          startedAt: null,
+          endedAt: null,
+          frameworkCount: 4,
+          completedFrameworkCount: 0,
+        });
+      }
+
+      return jsonResponse({ error: `Unexpected URL ${url}` }, 500);
+    });
+
+    render(<DecisionStudio initialDecisionId="decision-5" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("4 selected")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "All 50" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("50 selected")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Build Brief" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("4 selected")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getAllByRole("button", { name: "Run Analysis" })[0]);
+
+    await waitFor(() => {
+      expect(analyzeBodies).toHaveLength(1);
+    });
+
+    expect(analyzeBodies[0].frameworkIds).toEqual(expectedTop4AfterRefresh);
+    expect(analyzeBodies[0].frameworkIds).toHaveLength(4);
   });
 });

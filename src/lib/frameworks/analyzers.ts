@@ -1,4 +1,5 @@
 import { getFrameworkDefinition } from "@/lib/frameworks/registry";
+import { computeThemeFitScore } from "@/lib/frameworks/fit-ranking";
 import { buildCanonicalVisualizationIfTop12 } from "@/lib/frameworks/visual-builders";
 import { isTop12FrameworkId, validateFrameworkViz } from "@/lib/frameworks/visual-contracts";
 import { blendThemeVectors, normalizeThemeVector } from "@/lib/analysis/theme";
@@ -51,19 +52,6 @@ const THEME_KEYS: Array<keyof ThemeVector> = [
   "stakeholderImpact",
 ];
 
-function themeFitScore(framework: FrameworkDefinition, decisionThemes: ThemeVector): number {
-  let weighted = 0;
-  let weights = 0;
-
-  for (const key of THEME_KEYS) {
-    const fw = framework.themeWeights[key];
-    weighted += fw * decisionThemes[key];
-    weights += fw;
-  }
-
-  return clamp(weighted / Math.max(weights, 1e-6));
-}
-
 function seededValue(seed: string, salt: string, min = 0, max = 1): number {
   const value = hashStringToFloat(seed, salt);
   return min + value * (max - min);
@@ -96,7 +84,7 @@ function extractAlternatives(brief: DecisionBrief): string[] {
 }
 
 function baseGeneric(context: AnalyzerContext, seed: string): AnalyzerResultParts {
-  const fit = themeFitScore(context.framework, context.decisionThemes);
+  const fit = computeThemeFitScore(context.framework.themeWeights, context.decisionThemes);
 
   return {
     insights: [
@@ -667,7 +655,7 @@ export function analyzeFrameworkSimulation(
 ): FrameworkResult {
   const framework = getFrameworkDefinition(frameworkId);
   const seed = `${frameworkId}:${brief.title}:${brief.decisionStatement}`;
-  const fitScore = themeFitScore(framework, decisionThemes);
+  const fitScore = computeThemeFitScore(framework.themeWeights, decisionThemes);
 
   const context: AnalyzerContext = {
     brief,
@@ -720,7 +708,7 @@ export async function analyzeFrameworkWithLLM(
   llm: LLMFrameworkAnalysisContext,
 ): Promise<FrameworkResult> {
   const framework = getFrameworkDefinition(frameworkId);
-  const fitScore = themeFitScore(framework, decisionThemes);
+  const fitScore = computeThemeFitScore(framework.themeWeights, decisionThemes);
 
   const generated = await llm.adapter.generateJson({
     systemPrompt: [
